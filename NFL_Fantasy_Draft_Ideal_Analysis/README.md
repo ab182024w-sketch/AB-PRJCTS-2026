@@ -14,7 +14,7 @@ Given season-long CSV exports of NFL player statistics (one file per position gr
 | RB | 10 | Ranked by total fantasy points |
 | WR | 10 | Ranked by total fantasy points |
 | TE | 10 | Ranked by total fantasy points |
-| K | 1 | Single highest-scoring kicker |
+| K | 1 | **Deferred to v1.5** — the current CSVs carry no kicking stats (see §2) |
 | DEF | 5 | Team defenses, built by aggregating individual `LB` + `DB` + `DL` players up to their `Team` |
 
 The output is a ranked "ideal team" board — the players who *actually* produced the most, which doubles as a draft-value reference and a season-in-review.
@@ -50,11 +50,15 @@ RetTD  FumTD  2PT  Fum
 | `2PT` | NUMBER | Two-point conversions |
 | `Fum` | NUMBER | Fumbles lost |
 
-### Known data gaps (must be resolved before building)
+### Known data gaps and the v1 decision
 
-1. **No kicking columns.** There is no `FGM`, `FGA`, `XPM`, or field-goal distance bucket in the header, so the "one kicker" requirement cannot be satisfied from these columns alone. Options: (a) source a second kicker CSV with `FGM_0_39 / FGM_40_49 / FGM_50+ / XPM / FGMiss`, or (b) drop the kicker slot for v1. **Decision pending.**
-2. **No team-defense columns.** Sacks, interceptions caught, fumbles recovered, safeties, and points allowed are not present. Defensive scoring will therefore be limited to what *is* available (`RetTD`, `FumTD`, and defensive players' own offensive-style production) unless a defensive CSV with `Sack / Int / FR / Safety / PtsAllowed / YdsAllowed` is added. **Decision pending.**
+Separate kicker and defense files exist but are not in scope yet. **v1 ranks strictly on the columns above**; the richer files land in v1.5 (§7).
+
+1. **No kicking columns.** There is no `FGM`, `FGA`, `XPM`, or field-goal distance bucket in the header. **v1 therefore omits the K slot entirely** rather than fabricating a kicker ranking from unrelated stats. v1.5 adds a kicker CSV (`FGM_0_39 / FGM_40_49 / FGM_50+ / XPM / FGMiss`) and restores the single-kicker slot.
+2. **No team-defense columns.** Sacks, interceptions caught, fumbles recovered, safeties, and points allowed are not present. **v1 ranks defenses only on what is available** — `RetTD`, `FumTD`, and any offensive-style production recorded for `LB`/`DB`/`DL` players — rolled up by `Team`. This is a weak proxy and the resulting top 5 should be treated as provisional; v1.5 replaces it with a real defensive CSV (`Sack / Int / FR / Safety / PtsAllowed / YdsAllowed`).
 3. **`PassingInt` is interceptions thrown** (a negative for the passer). Interceptions *caught* by a defender are a different, absent stat.
+
+The scoring-rules table (§4) and the slot configuration are data, not hard-coded SQL, specifically so that v1.5 adds rows and files rather than rewriting the pipeline.
 
 ---
 
@@ -121,7 +125,7 @@ CSV files
 
 **MARTS**
 - `FCT_PLAYER_SCORING`: one row per player per grain, with each scoring component broken out (`pass_pts`, `rush_pts`, `rec_pts`, `misc_pts`) alongside `total_pts`, so a surprising ranking can be explained rather than merely trusted.
-- `DIM_TEAM_DEFENSE`: `SUM` of `LB` + `DB` + `DL` production grouped by `Team`; this is what "joining LB, DB, DL" means in practice, and the top 5 teams by that total are the defense picks.
+- `DIM_TEAM_DEFENSE`: `SUM` of `LB` + `DB` + `DL` production grouped by `Team`; this is what "joining LB, DB, DL" means in practice, and the top 5 teams by that total are the defense picks. In v1 the only meaningful inputs are `RetTD` and `FumTD` (§2), so the roll-up is deliberately thin and swaps in real defensive stats at v1.5 without changing its interface.
 - `IDEAL_TEAM`: `QUALIFY ROW_NUMBER() OVER (PARTITION BY slot ORDER BY total_pts DESC) <= n` per slot, unioned into a single roster board.
 
 ### Warehouse / cost notes
@@ -153,7 +157,12 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 5. `sql/40_defense.sql` — `DIM_TEAM_DEFENSE` roll-up.
 6. `sql/50_ideal_team.sql` — the final ideal-team query.
 7. `sql/99_tests.sql` — the data-quality assertions from §6.
-8. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 1 K / 5 DEF) exported to CSV and committed as a reference result.
+8. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 5 DEF — no K in v1) exported to CSV and committed as a reference result.
+
+**Phase 1.5 — Kicker and real defensive stats**
+- Load the separate kicker CSV; add field-goal-by-distance and extra-point rows to the scoring-rules table; restore the 1-K slot.
+- Load the separate defensive CSV; rebuild `DIM_TEAM_DEFENSE` on sacks / interceptions / fumble recoveries / safeties / points allowed instead of the `RetTD`+`FumTD` proxy.
+- Re-run the reference output and diff the top 5 defenses against the v1 result to quantify how misleading the proxy was.
 
 **Phase 2 — Front end (future)**
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
@@ -183,8 +192,8 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 ## 9. Open Questions
 
 1. Is the CSV grain per-game or per-season, and is a `Week` column available? (§3)
-2. Where do kicker stats come from, or is the K slot dropped for v1? (§2)
-3. Should team defense use real defensive stats from an additional source, or only the columns present today? (§2)
-4. Which scoring mode is canonical — standard, half-PPR, or full PPR?
-5. Which season(s) do the current files cover, and will they be refreshed in-season?
-6. Does "top 5 Defenses" mean the 5 best team defenses, or the top 5 individual defenders across `LB`/`DB`/`DL`? This document assumes team defenses.
+2. Which scoring mode is canonical — standard, half-PPR, or full PPR?
+3. Which season(s) do the current files cover, and will they be refreshed in-season?
+4. Does "top 5 Defenses" mean the 5 best team defenses, or the top 5 individual defenders across `LB`/`DB`/`DL`? This document assumes team defenses.
+
+**Resolved:** v1 ranks only on the columns present today — no kicker slot, defenses on the `RetTD`/`FumTD` proxy. The separate kicker and defensive files are deferred to Phase 1.5. (§2, §7)
