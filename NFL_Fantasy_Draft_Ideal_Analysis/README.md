@@ -80,7 +80,7 @@ Consequences that shape the whole pipeline:
 
 ### Grain follow-ups
 
-- **No `Week` column is present in the header.** Games can be counted and aggregated, but they cannot be *ordered*, so trend, streak, and last-N-weeks analysis is unavailable until a `Week` or date column is added to the export. Adding one is cheap and unlocks the Phase 2 week-by-week chart.
+- **No `Week` column is present in the header.** Games can be counted and aggregated, but they cannot be *ordered*, so trend, streak, and last-N-weeks analysis is unavailable until a `Week` or date column is added to the export. Adding one is cheap and unlocks the Phase 2 per-game trend chart.
 - **Duplicate `(PlayerId, PlayerOpponent)` pairs are expected** for division opponents played twice. Without a `Week`, those two games are indistinguishable — so deduplication must *not* key on `(PlayerId, PlayerOpponent)` or it will silently delete real games. See §5.
 - **Bye weeks and DNPs:** presence of zero-stat rows vs. missing rows decides whether `games_played` means games active or games on roster. To be verified against the loaded row counts.
 
@@ -182,22 +182,145 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 - Load the separate defensive CSV; rebuild `DIM_TEAM_DEFENSE` on sacks / interceptions / fumble recoveries / safeties / points allowed instead of the `RetTD`+`FumTD` proxy.
 - Re-run the reference output and diff the top 5 defenses against the v1 result to quantify how misleading the proxy was.
 
-**Phase 2 — Front end (future)**
+**Phase 2 — Front end (future)** — stack recommendation in §8
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
-- Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/misc`) and week-by-week chart; a team-defense comparison view.
+- Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/misc`) and per-game chart; a team-defense comparison view.
 - Interactive scoring: PPR toggle and editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules.
 - Design intent: dark-mode-first, position-color-coded, responsive, fast — the table is the product, so sorting and filtering must feel instant.
-- Serving approach TBD: either query Snowflake directly through a thin API layer, or export the marts to a small cached store the front end reads. Choice depends on whether the data updates in-season.
 
-**Phase 3 — Waiver-wire tracking scraper (future)**
-- A scheduled scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
-- Outputs a "waiver targets" view: high projected points, low roster percentage, favorable upcoming opponent.
-- Requirements: respect each source's `robots.txt` and terms of service, rate-limit politely, cache raw responses, and store snapshots as time series so trends over weeks are visible rather than only the latest state.
-- Scheduling via Snowflake Tasks or an external orchestrator; raw scrape payloads land in RAW with a load timestamp, then flow through the same staging → marts pattern.
+**Phase 3 — Waiver-wire tracking scraper (future)** — stack recommendation in §9
+- A scheduled Python scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
+- Outputs a "waiver targets" view: high season/per-game points, low roster percentage, favorable upcoming opponent.
+- Snapshots are stored as a time series so week-over-week roster-percentage *movement* is visible, not only the latest state.
 
 ---
 
-## 8. Out of Scope (for now)
+## 8. Recommended Front-End Stack
+
+Everything here is Python-first so the UI and the pipeline share one language and one set of Snowflake credentials.
+
+### Recommendation: Streamlit for v1
+
+**Streamlit**, ideally deployed as **Streamlit in Snowflake (SiS)**.
+
+Why it fits this project specifically:
+- The product *is* a set of ranked tables plus a few charts. That is precisely Streamlit's sweet spot, and it is roughly a few hundred lines rather than a separate front-end codebase.
+- Running inside Snowflake means no separate hosting, no credential plumbing, no data egress — the app queries the marts directly and inherits Snowflake's auth and role-based access.
+- The interactive scoring requirement (PPR toggle, editable point values, re-rank live) is a slider/number-input bound to a parameterized query. In Streamlit that is a handful of widgets; in a hand-rolled SPA it is a state-management project.
+- Pure Python means the same person maintaining the SQL maintains the UI.
+
+Supporting libraries:
+
+| Concern | Choice | Reason |
+| --- | --- | --- |
+| Snowflake connectivity | `snowflake-snowpark-python` (or `snowflake-connector-python` outside SiS) | Native session inside SiS; DataFrame API keeps filtering pushed down to the warehouse |
+| Data frames | `pandas`, or `polars` if data volume grows | Season-scale data is small; `pandas` is sufficient |
+| Tables | `st.dataframe` with `column_config` | Built-in sorting, number/progress-bar formatting, and pinned columns — no grid library needed |
+| Charts | `plotly` via `st.plotly_chart` | Interactive hover/zoom for per-game scoring and the stacked `pass/rush/rec/misc` breakdown |
+| Caching | `st.cache_data(ttl=...)` | Keeps the warehouse from being re-queried on every widget interaction |
+| Config | `st.secrets` / Snowflake secrets | No credentials in the repo |
+
+Rough shape:
+
+```python
+# app.py
+ppr = st.sidebar.select_slider("PPR", options=[0.0, 0.5, 1.0], value=1.0)
+min_games = st.sidebar.slider("Minimum games", 0, 17, 0)
+
+board = session.call("MARTS.IDEAL_TEAM", ppr, min_games).to_pandas()
+
+for slot, group in board.groupby("SLOT"):
+    st.subheader(slot)
+    st.dataframe(group, column_config={"PTS_PER_GAME": st.column_config.NumberColumn(format="%.1f")})
+```
+
+Re-ranking stays in SQL (a parameterized view or stored procedure); Streamlit only passes parameters and renders. This keeps a single source of scoring truth rather than reimplementing the point math in Python.
+
+### Upgrade path, only if Streamlit is outgrown
+
+Move to **FastAPI + React** when one of these becomes true — not before:
+- The design demands custom layout and interactions Streamlit cannot express.
+- A public dashboard needs per-user accounts, saved leagues, or rate limiting beyond what a single Streamlit process handles (going public alone does *not* require this — see "Making the dashboard public" below).
+- Sub-second interaction on large tables matters (Streamlit re-runs the script on each interaction).
+
+That stack: **FastAPI** (Python, matches the rest of the project) + `snowflake-connector-python` with a connection pool, `pydantic` response models, **React + TypeScript + Vite**, **TanStack Table** for the sortable/filterable grid, **Tailwind** + **shadcn/ui** for the dark-mode-first design, and **Recharts** for charts. Deploy the API on any container host and the front end as static files.
+
+**Explicitly not recommended:** Dash (heavier than Streamlit for equivalent output here) and Jupyter/Voilà (notebook semantics leak into the UI). A plain static export is also insufficient because live re-ranking is a stated requirement.
+
+### Serving strategy
+
+Query Snowflake directly. The marts are small, and the interactive PPR toggle needs live recomputation. Caching happens at the app layer (`st.cache_data`) plus Snowflake's own result cache; an intermediate export store would add staleness for no real benefit at this data volume — with one exception for public hosting, below.
+
+### Making the dashboard public
+
+Streamlit can absolutely serve a public, anyone-can-open dashboard — but **not** as Streamlit in Snowflake. SiS apps are gated behind Snowflake authentication and role grants, so every viewer needs a Snowflake login. Going public means running the *same app code* on a different host.
+
+| Option | Public? | Cost | Notes |
+| --- | --- | --- | --- |
+| **Streamlit in Snowflake** | No — Snowflake login required | Warehouse compute only | Best for private/personal use; recommended default (§8) |
+| **Streamlit Community Cloud** | Yes | Free | Deploys from a GitHub repo; simplest path to a public URL. Resource-limited and apps sleep when idle |
+| **Container host** (Cloud Run, Render, Fly.io) | Yes | Low, usage-based | Full control, custom domain, scale-to-zero. `streamlit run` in a container |
+
+The app code is identical across all three; only the Snowflake connection and secrets handling differ. Start on SiS, and moving public later is a deployment change, not a rewrite — which is a further reason to keep scoring logic in SQL rather than in the UI layer.
+
+**Connecting a public app to Snowflake safely.** Outside SiS there is no inherited identity, so the app authenticates as one service account shared by every visitor. That account must be:
+- **Read-only and narrowly scoped** — a dedicated role with `SELECT` on the `MARTS` views only; no access to `RAW`, `STAGING`, or any other database.
+- **Key-pair authenticated**, with the private key in the host's secret store (`st.secrets`, or the platform's secret manager) — never in the repo. Note that Streamlit Community Cloud requires a public GitHub repo, so secret hygiene is not optional there.
+- **Backed by a dedicated `XSMALL` warehouse** with `AUTO_SUSPEND = 60`, a resource monitor, and a statement timeout. Anonymous traffic is anonymous compute spend; the resource monitor is the thing that stops a scraper or a bored visitor from running up a bill.
+
+**Cheaper alternative: ship the data with the app.** Since v1 ranks a completed season rather than live in-season data, the marts can be exported to a Parquet/DuckDB file and bundled with the deployment. The app then queries the local file, public traffic never touches Snowflake, cost is effectively zero, and there is no service account to leak. Filtering and PPR re-ranking still work — DuckDB runs the same SQL locally. The tradeoff is a rebuild-and-redeploy step whenever the data refreshes, which is acceptable at weekly or seasonal cadence and only becomes wrong if the data starts updating live.
+
+**Recommendation:** SiS privately first; when going public, Streamlit Community Cloud with the bundled DuckDB export. Add the read-only Snowflake service account only once the dashboard genuinely needs live data.
+
+---
+
+## 9. Recommended Scraper Stack (Python)
+
+### Libraries
+
+| Concern | Choice | Reason |
+| --- | --- | --- |
+| HTTP | `httpx` (or `requests`) with a `Retry`/backoff wrapper | Connection pooling, timeouts, HTTP/2; set a descriptive `User-Agent` identifying the project |
+| HTML parsing | `selectolax` | Substantially faster than BeautifulSoup and sufficient for CSS-selector extraction |
+| Fallback parsing | `beautifulsoup4` + `lxml` | Only where messy markup needs its leniency |
+| Tables | `pandas.read_html` | One-liner when the source is already a clean HTML table |
+| JS-rendered pages | `playwright` (sync API) | Many fantasy sites render rosters client-side; use only where a static fetch genuinely fails, since it is far slower |
+| Validation | `pydantic` | Reject malformed scrapes at the boundary instead of loading garbage into RAW |
+| Robots compliance | `urllib.robotparser` | Checked before each fetch |
+| Rate limiting | `tenacity` for retries + a fixed inter-request delay | Exponential backoff on 429/5xx |
+| Snowflake load | `snowflake-connector-python` `write_pandas`, or `PUT` + `COPY INTO` | Same RAW → STAGING → MARTS path as the CSVs |
+| Scheduling | GitHub Actions cron for v1; Snowflake Tasks or Prefect/Dagster if it grows | A weekly/daily scrape does not justify an orchestrator yet |
+| Dependencies | `uv` with `pyproject.toml` | Fast, reproducible lockfile |
+| Testing | `pytest` + `vcrpy` or saved HTML fixtures | Parser tests must not hit the network |
+
+### Design rules
+
+- **Prefer an official/public API over scraping** wherever one exists — it is more stable and unambiguously permitted. Scrape only as a fallback.
+- **Check `robots.txt` and each site's terms of service before adding a source**, rate-limit politely (roughly one request per second, single-threaded), and never scrape behind a login.
+- **Persist the raw response** (gzipped HTML/JSON keyed by source and fetch timestamp) before parsing. When a site's markup changes, the parser can be fixed and re-run against history instead of losing the data.
+- **Append-only snapshots.** Every scrape inserts rows stamped with `scraped_at`; nothing is overwritten. Roster-percentage *movement* is the actual signal for waiver decisions, and it only exists if history is kept.
+- **Parsers are pure functions** from HTML to validated records, tested against committed fixtures so they can be verified offline.
+- **Fail loudly.** A selector that matches zero rows raises rather than silently loading an empty snapshot.
+
+### Proposed layout
+
+```
+scraper/
+  pyproject.toml
+  src/waiver/
+    fetch.py       # httpx client, robots check, rate limiting, raw response caching
+    sources/       # one module per site: parse(html) -> list[PlayerRosterPct]
+    models.py      # pydantic schemas
+    load.py        # write validated snapshots to RAW.WAIVER_SNAPSHOT_RAW
+    cli.py         # `waiver scrape --source X --dry-run`
+  tests/fixtures/  # saved HTML for offline parser tests
+```
+
+The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAYER_SEASON` on `PlayerId` and surfaces high points-per-game at low roster percentage, with the week-over-week delta as a trend indicator. Player-name matching across sources will need an alias/crosswalk table — `PlayerId` is unlikely to be shared with an external site.
+
+---
+
+## 10. Out of Scope (for now)
 
 - Live in-season projections or forecasting models — this ranks *actual* production.
 - Trade analyzers, auction values, and keeper/dynasty valuation.
@@ -207,7 +330,7 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 
 ---
 
-## 9. Open Questions
+## 11. Open Questions
 
 1. Can a `Week` or date column be added to the export? Rows are per-game but unordered without it, which blocks trend analysis and makes duplicate detection imprecise. (§3)
 2. Which scoring mode is canonical — standard, half-PPR, or full PPR?
