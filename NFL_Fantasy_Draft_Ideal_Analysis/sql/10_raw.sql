@@ -7,6 +7,12 @@ USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;
 USE SCHEMA RAW;
 
+-- Season parameter (README §7, Phase 1.5). `pipeline/run_sql.py --season 2026`
+-- sets TARGET_SEASON before the first file; running this in a Snowsight
+-- worksheet with nothing set falls back to 2025. Every later script repeats
+-- this same line so each file is runnable on its own.
+SET target_season = COALESCE(GETVARIABLE('TARGET_SEASON')::NUMBER, 2025);
+
 -- ---------------------------------------------------------------- OFFENSE ---
 CREATE TABLE IF NOT EXISTS OFFENSE_RAW (
     player_name             VARCHAR,
@@ -106,18 +112,27 @@ CREATE TABLE IF NOT EXISTS K_SEASON_RAW       LIKE K_RAW;
 CREATE TABLE IF NOT EXISTS DEFENSE_SEASON_RAW LIKE DEFENSE_RAW;
 
 -- =============================== LOADS =====================================
--- Re-runnable: truncate the target for the season being loaded, then COPY with
--- FORCE so a re-PUT of a corrected file is picked up. ON_ERROR = CONTINUE keeps
--- one bad row from failing the load; the rejected rows are reviewed below
--- rather than silently discarded (README §5).
+-- Season-scoped and re-runnable (README §7, Phase 1.5): delete only the target
+-- season's rows, then re-COPY only that season's files. Earlier seasons stay
+-- put, so a weekly in-season refresh is the same command as a backfill and
+-- 2015-2024 can be loaded one season at a time without a reload of everything.
+--
+-- The season lives in the stage path, not in a column, so it has to reach the
+-- COPY through PATTERN — which takes a literal, not a variable. Hence the
+-- SET/EXECUTE IMMEDIATE pairs: the statement text is assembled with
+-- $target_season and then run. FORCE = TRUE picks up a re-PUT of a corrected
+-- file; ON_ERROR = CONTINUE keeps one bad row from failing the load, and the
+-- rejected rows are reviewed by the VALIDATE call after each COPY rather than
+-- silently discarded (README §5).
 
-TRUNCATE TABLE IF EXISTS OFFENSE_RAW;
-TRUNCATE TABLE IF EXISTS K_RAW;
-TRUNCATE TABLE IF EXISTS DEFENSE_RAW;
-TRUNCATE TABLE IF EXISTS OFFENSE_SEASON_RAW;
-TRUNCATE TABLE IF EXISTS K_SEASON_RAW;
-TRUNCATE TABLE IF EXISTS DEFENSE_SEASON_RAW;
+DELETE FROM OFFENSE_RAW        WHERE source_file LIKE '%' || $target_season || '/%';
+DELETE FROM K_RAW              WHERE source_file LIKE '%' || $target_season || '/%';
+DELETE FROM DEFENSE_RAW        WHERE source_file LIKE '%' || $target_season || '/%';
+DELETE FROM OFFENSE_SEASON_RAW WHERE source_file LIKE '%' || $target_season || '/%';
+DELETE FROM K_SEASON_RAW       WHERE source_file LIKE '%' || $target_season || '/%';
+DELETE FROM DEFENSE_SEASON_RAW WHERE source_file LIKE '%' || $target_season || '/%';
 
+SET stmt = $$
 COPY INTO OFFENSE_RAW
 FROM (
     SELECT
@@ -129,16 +144,18 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/[0-9]{1,2}/(QB|RB|WR|TE)[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/[0-9]{1,2}/(QB|RB|WR|TE)[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;
 
 -- Review, do not ignore, whatever ON_ERROR = CONTINUE skipped. VALIDATE's
 -- '_last' means "the last COPY in this session", so each call has to sit
 -- immediately after its own COPY.
 SELECT * FROM TABLE(VALIDATE(OFFENSE_RAW, JOB_ID => '_last'));
 
+SET stmt = $$
 COPY INTO K_RAW
 FROM (
     SELECT
@@ -149,13 +166,15 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/[0-9]{1,2}/K[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/[0-9]{1,2}/K[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;
 
 SELECT * FROM TABLE(VALIDATE(K_RAW, JOB_ID => '_last'));
 
+SET stmt = $$
 COPY INTO DEFENSE_RAW
 FROM (
     SELECT
@@ -167,16 +186,18 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/[0-9]{1,2}/(DB|LB|DL)[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/[0-9]{1,2}/(DB|LB|DL)[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;
 
 SELECT * FROM TABLE(VALIDATE(DEFENSE_RAW, JOB_ID => '_last'));
 
 -- Season files sit at <season>/<POS>_season.csv — one directory level up, which
 -- is what separates them from the weekly pattern above. They have no
 -- PlayerOpponent column, so column 5 onward shifts by one; NULL is substituted.
+SET stmt = $$
 COPY INTO OFFENSE_SEASON_RAW
 FROM (
     SELECT
@@ -188,11 +209,13 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/(QB|RB|WR|TE)_season[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/(QB|RB|WR|TE)_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;
 
+SET stmt = $$
 COPY INTO K_SEASON_RAW
 FROM (
     SELECT
@@ -201,11 +224,13 @@ FROM (
         METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/K_season[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/K_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;
 
+SET stmt = $$
 COPY INTO DEFENSE_SEASON_RAW
 FROM (
     SELECT
@@ -215,7 +240,8 @@ FROM (
         METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*[0-9]{4}/(DB|LB|DL)_season[.]csv([.]gz)?'
+PATTERN = '.*$$ || $target_season || $$/(DB|LB|DL)_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
-FORCE = TRUE;
+FORCE = TRUE$$;
+EXECUTE IMMEDIATE $stmt;

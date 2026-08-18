@@ -4,6 +4,10 @@ Usage:
     python -m pipeline.download --season 2025 --weeks 1-18
     python -m pipeline.download --season 2026 --weeks 5 --put-to-stage
 
+Phase 1.6 adds the nflverse team-results feed (README §5a) behind --nflverse:
+the league-wide schedule (points allowed) and team-week offensive splits
+(yards allowed), which the player-stat source does not carry.
+
 Idempotent: a file is re-downloaded only when its content differs from what is
 already on disk, and writes go through a temp file + atomic rename, so an
 interrupted run never leaves a half-written CSV behind.
@@ -25,6 +29,7 @@ from pathlib import Path
 import requests
 
 RAW_BASE = "https://raw.githubusercontent.com/hvpkod/NFL-Data/main/NFL-data-Players"
+NFLVERSE_BASE = "https://github.com/nflverse/nflverse-data/releases/download"
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DB", "LB", "DL")
 DEFAULT_SEASON = 2025
 DEFAULT_WEEKS = range(1, 19)
@@ -97,6 +102,21 @@ def _targets(season: int, weeks: list[int], include_season_files: bool) -> list[
     return paths
 
 
+def _nflverse_targets(season: int) -> list[tuple[str, str]]:
+    """(url, local path) for the two Phase 1.6 assets (README §5a).
+
+    `games.csv` is league-wide and covers every season in one file, so it is
+    stored outside the per-season tree; the team-week file is per season.
+    """
+    return [
+        (f"{NFLVERSE_BASE}/schedules/games.csv", "nflverse/games.csv"),
+        (
+            f"{NFLVERSE_BASE}/stats_team/stats_team_week_{season}.csv",
+            f"nflverse/{season}/stats_team_week_{season}.csv",
+        ),
+    ]
+
+
 def _row_count(content: bytes) -> int:
     text = content.decode("utf-8-sig", errors="replace")
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -159,6 +179,42 @@ def download(
     return report
 
 
+def download_nflverse(
+    data_dir: Path,
+    season: int,
+    timeout: float = 60.0,
+) -> list[FileResult]:
+    """Download the nflverse team-results assets. Same idempotency as `download`.
+
+    A season that has not started yet has no `stats_team_week_{season}.csv`
+    release asset, which surfaces as `missing` rather than as an error — the
+    2026 refresh will hit exactly that until week 1 is played.
+    """
+    session = requests.Session()
+    session.headers["User-Agent"] = USER_AGENT
+    results: list[FileResult] = []
+    for url, relative_path in _nflverse_targets(season):
+        try:
+            response = session.get(url, timeout=timeout)
+            if response.status_code == 404:
+                results.append(FileResult(relative_path, "missing", detail="404 at source"))
+                continue
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            results.append(FileResult(relative_path, "error", detail=str(exc)))
+            continue
+        changed = write_if_changed(data_dir / relative_path, response.content)
+        results.append(
+            FileResult(
+                relative_path,
+                "downloaded" if changed else "unchanged",
+                rows=_row_count(response.content),
+                bytes=len(response.content),
+            )
+        )
+    return results
+
+
 def snowflake_configured() -> bool:
     return all(os.environ.get(var) for var in SNOWFLAKE_ENV_VARS) and bool(
         os.environ.get("SNOWFLAKE_PASSWORD") or os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
@@ -192,10 +248,23 @@ def put_to_stage(
     else:
         connect_args["private_key_file"] = os.environ["SNOWFLAKE_PRIVATE_KEY_PATH"]
 
+    sources = [data_dir / str(season)]
+    nflverse = data_dir / "nflverse"
+    if nflverse.exists():
+        # Only this season's team-week file, plus the league-wide schedule.
+        sources += [nflverse / str(season), nflverse / "games.csv"]
+
+    paths: list[Path] = []
+    for source in sources:
+        if source.is_dir():
+            paths += sorted(source.rglob("*.csv"))
+        elif source.is_file():
+            paths.append(source)
+
     statements = 0
     with snowflake.connector.connect(**connect_args) as connection:
         cursor = connection.cursor()
-        for csv_path in sorted((data_dir / str(season)).rglob("*.csv")):
+        for csv_path in paths:
             stage_path = f"{stage}/{csv_path.relative_to(data_dir).parent.as_posix()}"
             cursor.execute(
                 f"PUT 'file://{csv_path}' {stage_path} "
@@ -215,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path(__file__).resolve().parent.parent / "data",
     )
     parser.add_argument("--no-season-files", action="store_true", help="skip {POS}_season.csv reconciliation files")
+    parser.add_argument("--nflverse", action="store_true", help="also fetch the Phase 1.6 team-results feed (README §5a)")
     parser.add_argument("--put-to-stage", action="store_true", help="PUT the tree to the Snowflake stage after download")
     parser.add_argument("--stage", default="@FANTASY_STAGE")
     parser.add_argument("--report", type=Path, help="write the JSON run report here")
@@ -226,6 +296,9 @@ def main(argv: list[str] | None = None) -> int:
         weeks=parse_weeks(args.weeks),
         include_season_files=not args.no_season_files,
     )
+
+    if args.nflverse:
+        report.results += download_nflverse(args.data_dir, args.season)
 
     counts = report.by_status
     print(f"season {report.season} weeks {report.weeks[0]}-{report.weeks[-1]} -> {args.data_dir}")

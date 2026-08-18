@@ -1,9 +1,9 @@
 scoring_mode,slot,player_name,team,total_pts,games_played,pts_per_game,slot_rank
-full_ppr,DEF,HOU D/ST,HOU,144.0,17,8.47,1
-full_ppr,DEF,PIT D/ST,PIT,138.0,17,8.12,2
-full_ppr,DEF,CLE D/ST,CLE,132.0,17,7.76,3
-full_ppr,DEF,CHI D/ST,CHI,129.0,17,7.59,4
-full_ppr,DEF,SEA D/ST,SEA,129.0,17,7.59,5
+full_ppr,DEF,HOU D/ST,HOU,194.0,17,11.41,1
+full_ppr,DEF,SEA D/ST,SEA,180.0,17,10.59,2
+full_ppr,DEF,CLE D/ST,CLE,166.0,17,9.76,3
+full_ppr,DEF,MIN D/ST,MIN,158.0,17,9.29,4
+full_ppr,DEF,DEN D/ST,DEN,156.0,17,9.18,5
 full_ppr,K,Jason Myers,SEA,200.0,17,11.76,1
 full_ppr,QB,Josh Allen,BUF,356.62,17,20.98,1
 full_ppr,QB,Matthew Stafford,LAR,342.38,17,20.14,2
