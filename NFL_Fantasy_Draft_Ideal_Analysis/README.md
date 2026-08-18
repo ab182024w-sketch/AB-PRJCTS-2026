@@ -62,13 +62,27 @@ The scoring-rules table (§4) and the slot configuration are data, not hard-code
 
 ---
 
-## 3. Grain and Modeling Questions
+## 3. Grain
 
-The single most important thing to pin down before writing SQL:
+**Confirmed: one row per player per game.** `PlayerId` alone is therefore *not* unique in the source — the grain is `(PlayerId, game)`, with `PlayerOpponent` identifying the game.
 
-- **Is each row one player-week, or one player-season?** The presence of `PlayerOpponent` implies **player-per-game grain**. If so, season totals require a `GROUP BY PlayerId` and any per-game/consistency metric becomes available. If the files are season totals with a stray opponent column, that column is noise.
-- If per-game grain: is there a `Week` or date column available in the export? Without one, weeks cannot be ordered and no trend/streak analysis is possible.
-- **Bye weeks and DNPs:** are they present as zero rows or absent entirely? This changes whether `AVG(points)` means points-per-game or points-per-rostered-week.
+Consequences that shape the whole pipeline:
+
+- **Season totals are a `GROUP BY PlayerId` aggregation**, not a direct read. `FCT_PLAYER_SCORING` scores each row at game grain; a separate `AGG_PLAYER_SEASON` sums to the season level, and the ideal-team ranking reads from the season aggregate.
+- **Per-game and consistency metrics come for free** and are worth computing, since the whole point of an "ideal team" board is separating volume from reliability:
+  - `games_played` — count of rows per player
+  - `pts_per_game` — `total_pts / games_played`
+  - `stddev_pts` and coefficient of variation — boom/bust measure
+  - `floor` / `ceiling` — e.g. 20th and 80th percentile game via `PERCENTILE_CONT`
+  - `weeks_above_threshold` — count of startable games (position-specific cutoff)
+  - `best_game` / `worst_game`
+- **Ranking is on season `total_pts`** (the stated requirement), with `pts_per_game` shown alongside so a high-scoring player who simply played more games is distinguishable from a genuinely better one. A minimum-games filter is a parameter, defaulting to no filter for the headline board.
+
+### Grain follow-ups
+
+- **No `Week` column is present in the header.** Games can be counted and aggregated, but they cannot be *ordered*, so trend, streak, and last-N-weeks analysis is unavailable until a `Week` or date column is added to the export. Adding one is cheap and unlocks the Phase 2 week-by-week chart.
+- **Duplicate `(PlayerId, PlayerOpponent)` pairs are expected** for division opponents played twice. Without a `Week`, those two games are indistinguishable — so deduplication must *not* key on `(PlayerId, PlayerOpponent)` or it will silently delete real games. See §5.
+- **Bye weeks and DNPs:** presence of zero-stat rows vs. missing rows decides whether `games_played` means games active or games on roster. To be verified against the loaded row counts.
 
 ---
 
@@ -104,8 +118,9 @@ CSV files
   → Snowflake internal stage  (@FANTASY_STAGE)
   → RAW.PLAYER_STATS_RAW      (all columns as VARCHAR, plus file/row lineage)
   → STAGING.STG_PLAYER_STATS  (typed, cleaned, deduped)
-  → MARTS.FCT_PLAYER_SCORING  (fantasy points per player per grain)
-  → MARTS.DIM_TEAM_DEFENSE    (LB+DB+DL rolled up to Team)
+  → MARTS.FCT_PLAYER_SCORING  (fantasy points per player per GAME)
+  → MARTS.AGG_PLAYER_SEASON   (season totals + per-game/consistency metrics)
+  → MARTS.DIM_TEAM_DEFENSE    (LB+DB+DL rolled up to Team, season level)
   → MARTS.IDEAL_TEAM          (final ranked roster)
 ```
 
@@ -121,12 +136,13 @@ CSV files
 - `COALESCE(stat, 0)` only *after* the cast-failure count is checked — otherwise a parse bug looks like a zero-production week.
 - Normalize team abbreviations (e.g. `JAC`/`JAX`, `LA`/`LAR`, `WSH`/`WAS`) via a mapping table.
 - Trim/upper-case `Pos`; assert it is in the known set.
-- Deduplicate on `(PlayerId, Week)` — or `(PlayerId)` at season grain — keeping the last loaded row.
+- **Deduplicate on the full row hash, not on `(PlayerId, PlayerOpponent)`.** Rows are per-game and a team plays each division opponent twice, so keying on the opponent would delete legitimate games. With no `Week` column (§3), only an exact-duplicate-row collapse is safe — and even that is risky if a player posts an identical stat line twice, so duplicates are *reported for review* rather than dropped automatically.
 
 **MARTS**
-- `FCT_PLAYER_SCORING`: one row per player per grain, with each scoring component broken out (`pass_pts`, `rush_pts`, `rec_pts`, `misc_pts`) alongside `total_pts`, so a surprising ranking can be explained rather than merely trusted.
+- `FCT_PLAYER_SCORING`: **one row per player per game**, with each scoring component broken out (`pass_pts`, `rush_pts`, `rec_pts`, `misc_pts`) alongside `total_pts`, so a surprising ranking can be explained rather than merely trusted.
+- `AGG_PLAYER_SEASON`: `GROUP BY PlayerId` over the fact table — season `total_pts`, `games_played`, `pts_per_game`, `stddev_pts`, floor/ceiling percentiles, and `weeks_above_threshold` (§3). This is what the ideal-team ranking reads from.
 - `DIM_TEAM_DEFENSE`: `SUM` of `LB` + `DB` + `DL` production grouped by `Team`; this is what "joining LB, DB, DL" means in practice, and the top 5 teams by that total are the defense picks. In v1 the only meaningful inputs are `RetTD` and `FumTD` (§2), so the roll-up is deliberately thin and swaps in real defensive stats at v1.5 without changing its interface.
-- `IDEAL_TEAM`: `QUALIFY ROW_NUMBER() OVER (PARTITION BY slot ORDER BY total_pts DESC) <= n` per slot, unioned into a single roster board.
+- `IDEAL_TEAM`: `QUALIFY ROW_NUMBER() OVER (PARTITION BY slot ORDER BY season_total_pts DESC) <= n` per slot, unioned into a single roster board, carrying `games_played` and `pts_per_game` as context columns.
 
 ### Warehouse / cost notes
 - An `XSMALL` warehouse with auto-suspend at 60s is more than sufficient for a single season of player-week rows.
@@ -138,7 +154,8 @@ CSV files
 
 Run as assertions after each load; a failure blocks promotion to MARTS.
 
-- `PlayerId` is never null and is unique at the declared grain.
+- `PlayerId` is never null; `(PlayerId, PlayerOpponent)` appears at most twice (home/away against a division rival) — three or more occurrences indicate a duplicate load.
+- `games_played` per player is between 1 and 17; anything higher means rows were double-loaded.
 - `Pos` is in the allowed set; unmapped values are reported, not dropped.
 - No negative yardage totals where impossible; flag implausible outliers (e.g. `PassingYDS > 700` in one game).
 - Row count per position group is within an expected band vs. the previous load.
@@ -154,10 +171,11 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 2. `sql/10_raw.sql` — RAW tables and `COPY INTO` loads.
 3. `sql/20_staging.sql` — typed/cleaned staging views.
 4. `sql/30_scoring.sql` — scoring-rules table and `FCT_PLAYER_SCORING`.
-5. `sql/40_defense.sql` — `DIM_TEAM_DEFENSE` roll-up.
-6. `sql/50_ideal_team.sql` — the final ideal-team query.
-7. `sql/99_tests.sql` — the data-quality assertions from §6.
-8. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 5 DEF — no K in v1) exported to CSV and committed as a reference result.
+5. `sql/35_season_agg.sql` — `AGG_PLAYER_SEASON` season totals and per-game/consistency metrics.
+6. `sql/40_defense.sql` — `DIM_TEAM_DEFENSE` roll-up.
+7. `sql/50_ideal_team.sql` — the final ideal-team query.
+8. `sql/99_tests.sql` — the data-quality assertions from §6.
+9. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 5 DEF — no K in v1) exported to CSV and committed as a reference result.
 
 **Phase 1.5 — Kicker and real defensive stats**
 - Load the separate kicker CSV; add field-goal-by-distance and extra-point rows to the scoring-rules table; restore the 1-K slot.
@@ -191,9 +209,11 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 
 ## 9. Open Questions
 
-1. Is the CSV grain per-game or per-season, and is a `Week` column available? (§3)
+1. Can a `Week` or date column be added to the export? Rows are per-game but unordered without it, which blocks trend analysis and makes duplicate detection imprecise. (§3)
 2. Which scoring mode is canonical — standard, half-PPR, or full PPR?
 3. Which season(s) do the current files cover, and will they be refreshed in-season?
 4. Does "top 5 Defenses" mean the 5 best team defenses, or the top 5 individual defenders across `LB`/`DB`/`DL`? This document assumes team defenses.
 
-**Resolved:** v1 ranks only on the columns present today — no kicker slot, defenses on the `RetTD`/`FumTD` proxy. The separate kicker and defensive files are deferred to Phase 1.5. (§2, §7)
+**Resolved:**
+- v1 ranks only on the columns present today — no kicker slot, defenses on the `RetTD`/`FumTD` proxy. The separate kicker and defensive files are deferred to Phase 1.5. (§2, §7)
+- Rows are per-player-per-game; season totals are an explicit aggregation and per-game/consistency metrics are in scope. (§3)
