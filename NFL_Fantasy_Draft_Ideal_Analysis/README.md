@@ -8,9 +8,18 @@ Source data: [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), 2025 season 
 
 ```bash
 pip install -r requirements.txt
-python -m pipeline.download --season 2025 --weeks 1-18     # Phase 0
-python -m pipeline.validate_scoring --season 2025 --out reference/   # local scoring check
+
+# Phase 0 + 1.6 download, then PUT to the Snowflake stage
+python -m pipeline.download --season 2025 --weeks 1-18 --nflverse --put-to-stage
+
+# the whole warehouse, in order, for one season (SNOWFLAKE_ACCOUNT/USER/PASSWORD in env)
+python -m pipeline.run_sql --season 2025 --all
+
+# same scoring, locally, as an independent check on the SQL
+python -m pipeline.validate_scoring --season 2025 --out reference/
 ```
+
+Re-running any of these is safe, and `--season` is the only thing to change in 2026 (§7, Phase 1.5).
 
 ---
 
@@ -202,11 +211,11 @@ Computed per defensive player, then summed to the team (§5).
 | Blocked kick | `Blk` | 2 |
 | Defensive 2pt return | `ScoreDef2ptRet` | 2 |
 
-**Points allowed and yards allowed are not in the source** (§2), so their tier bonuses — usually the largest single component of real DST scoring — are absent. They are recoverable from a second feed; see §5a for the confirmed plan. Tackles, TFL, passes defensed, and QB hits are deliberately **excluded** from team-defense scoring: they are IDP-league categories, and including them would make the ranking a measure of tackle volume (i.e. of a defense being on the field a lot, which correlates with being *bad*) rather than of defensive playmaking. They remain available in the fact table for a possible future IDP mode.
+**Points allowed and yards allowed are not in the source** (§2) — usually the largest single component of real DST scoring. They come from a second feed instead (§5a, implemented), so the DEF board measures both playmaking and what the defense actually gave up. Tackles, TFL, passes defensed, and QB hits are deliberately **excluded** from team-defense scoring: they are IDP-league categories, and including them would make the ranking a measure of tackle volume (i.e. of a defense being on the field a lot, which correlates with being *bad*) rather than of defensive playmaking. They remain available in the fact table for a possible future IDP mode.
 
-### Points-allowed / yards-allowed tiers (Phase 1.6 — §5a)
+### Points-allowed / yards-allowed tiers (Phase 1.6 — §5a, implemented)
 
-Once the team-results feed lands, these two tiers are added to the DEF score. Standard values:
+These two tiers are part of the DEF score. Standard values:
 
 | Points allowed | Points | | Yards allowed | Points |
 | --- | --- | --- | --- | --- |
@@ -218,7 +227,7 @@ Once the team-results feed lands, these two tiers are added to the DEF score. St
 | 28–34 | -1 | | 400–449 | -3 |
 | 35+ | -4 | | 450+ | -5 |
 
-Both are **per week**, then summed — a tier bonus averaged over a season would be meaningless. They are added as ordinary rows in `SCORING_RULES` keyed on a bucketed stat name, so nothing downstream changes.
+Both are **per week**, then summed — a tier bonus averaged over a season would be meaningless. They live in `MARTS.DEF_TIERS` (`metric, lower_bound, upper_bound, points`) rather than in `SCORING_RULES`: a tier is a banded lookup, not a per-unit rate, and 14 points allowed is not fourteen times the value of 1. The bands are half-open (`lower <= v < upper`, `NULL` upper = unbounded) so they can neither gap nor overlap, which `99_tests.sql` asserts directly. They are the same in all three scoring modes — PPR changes what a reception is worth, not what a shutout is.
 
 ## 5. Snowflake Architecture
 
@@ -231,8 +240,12 @@ hvpkod/NFL-Data CSVs  (season/week/POS.csv)
   → STAGING.STG_PLAYER_WEEK        (typed, cleaned, season/week parsed from path, unioned)
   → MARTS.FCT_PLAYER_SCORING       (points per player per week per scoring_mode)
   → MARTS.AGG_PLAYER_SEASON        (season totals + per-game/consistency metrics)
-  → MARTS.FCT_TEAM_DEFENSE         (DB+LB+DL rolled up to Team, per week then season)
+  → MARTS.FCT_TEAM_DEFENSE_WEEK    (DB+LB+DL rolled up to Team, + the §5a tier bonuses)
+  → MARTS.FCT_TEAM_DEFENSE         (that, summed to the season)
   → MARTS.IDEAL_TEAM               (final ranked roster, one board per scoring_mode)
+
+nflverse games.csv + stats_team_week.csv   (§5a)
+  → RAW.TEAM_GAME_RAW | TEAM_WEEK_RAW → STAGING.STG_TEAM_WEEK → FCT_TEAM_DEFENSE_WEEK
 ```
 
 Three RAW tables rather than one, because the three source schemas share only their five key columns. `STG_PLAYER_WEEK` is the union that reconciles them onto a common `(season, week, PlayerId, Pos, Team, opponent, stat, value)` shape — a **tall/EAV layout**, which is what allows `SCORING_RULES` to be a simple join on `stat` instead of a wide expression repeated three times per mode.
@@ -279,13 +292,21 @@ Both are stable release-asset URLs of the form `https://github.com/nflverse/nflv
 **Integration:**
 
 ```
-nflverse games.csv + stats_team_week.csv
-  → RAW.TEAM_GAME_RAW
+nflverse games.csv + stats_team_week_{season}.csv
+  → RAW.TEAM_GAME_RAW | RAW.TEAM_WEEK_RAW      (INFER_SCHEMA + MATCH_BY_COLUMN_NAME: the
+                                                team-week asset is ~138 columns and grows)
   → STAGING.STG_TEAM_WEEK        (season, week, team, opponent, points_allowed, yards_allowed)
-  → joins FCT_TEAM_DEFENSE on (season, week, team)
+  → MARTS.FCT_TEAM_DEFENSE_WEEK  (idp_pts + points_allowed_pts + yards_allowed_pts)
+  → MARTS.FCT_TEAM_DEFENSE       (season roll-up feeding the DEF board)
 ```
 
-The join key is `(season, week, team)`, which the existing team-defense fact already has — so this is an added left join plus two `SCORING_RULES` rows, not a re-model.
+The join key is `(season, week, team)`, which the existing team-defense fact already has — so this is an added left join plus a tier lookup, not a re-model.
+
+Three implementation details that are not obvious from the plan:
+
+- **Yards allowed is the opponent's *net* yards**: `passing_yards + sack_yards_lost + rushing_yards`. `sack_yards_lost` is already negative in the source, so it adds. Sacks reduce yards allowed, which is what a fantasy site's number reflects.
+- **Points allowed comes from `games.csv`, not from the team-week asset** — the schedule is the authoritative score and is published for a game before the box-score splits are.
+- **Only `game_type = 'REG'` team-weeks are scored.** nflverse runs to week 22 with `POST` rows; the fantasy season is weeks 1–18, where 15–18 are highlighted but still regular-season (§11). Including `POST` would let four teams accumulate bonuses in weeks that have no player-side rows at all.
 
 **The one real gotcha:** abbreviations nearly match but not exactly. Checked against 2025 week 18: the only conflict is the Rams — hvpkod uses `LAR`, nflverse uses `LA`. hvpkod additionally has `FA` (free agents), which has no team-results counterpart and is already excluded from defensive rollups (§3). The existing normalization mapping table (§5) absorbs both; the join must be asserted to produce exactly 32 teams per week so a silent abbreviation drift never quietly zeroes out a defense's tier bonus.
 
@@ -308,6 +329,17 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 - **Reconciliation against `{POS}_season.csv`:** summing our per-week rows to the season must match the source's own pre-aggregated season file stat-for-stat. This is a genuinely independent check on the ingestion — it catches missing weeks and double loads that internal consistency checks cannot.
 - **Reconciliation against `TotalPoints`:** our computed points should track the source's own scoring closely under at least one of the three modes. A large systematic gap means a scoring bug or a misread column (§2).
 
+Team results (§5a) add six more, all error-level:
+
+- `(season, week, team)` is unique in `STG_TEAM_WEEK` — a duplicate would pay a defense its points-allowed bonus twice.
+- Every regular-season week has a plausible number of teams (20–32; below 32 only because of byes, never above).
+- Every team and opponent abbreviation resolves through `TEAM_ALIAS` — this is the check that catches the Rams (`LA` vs `LAR`) if the crosswalk is ever dropped.
+- Every played regular-season team-week has yards allowed, i.e. the two nflverse assets agree on which games happened. Without it a missing row would silently score as a 0-yard game.
+- Every outcome falls in **exactly one** points-allowed band and one yards-allowed band — no gap, no overlap.
+- Every row of `FCT_TEAM_DEFENSE_WEEK` carries a team result, so no defense is ranked on IDP points alone against defenses that also got tier bonuses.
+
+Both reconciliations are scoped to the target season: they join on `player_id`, and once more than one season is loaded (Phase 1.5) a player's 2024 season file would otherwise be compared against his 2025 weeks.
+
 ---
 
 ## 7. Deliverables
@@ -319,21 +351,30 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 1. `sql/00_setup.sql` — database, schemas, warehouse, file formats, stage.
    - `sql/05_git_repository.sql` — optional: mounts this GitHub repo as a Snowflake `GIT REPOSITORY`, so Snowsight → Projects → Workspaces browses `sql/*.sql` in the same tree as GitHub and each file opens as a worksheet. Nothing downstream depends on it; re-run `ALTER GIT REPOSITORY … FETCH` after every push, since the mount is a snapshot, not a live view.
 2. `sql/10_raw.sql` — the three RAW tables and `COPY INTO` loads, with `season`/`week` from `METADATA$FILENAME`.
-3. `sql/20_staging.sql` — typed/cleaned staging, path parsing, and the union onto the common tall shape.
+3. `sql/15_team_results.sql` — the nflverse team-results load and `STG_TEAM_WEEK` (Phase 1.6, §5a).
+4. `sql/20_staging.sql` — typed/cleaned staging, path parsing, and the union onto the common tall shape.
 4. `sql/30_scoring.sql` — `SCORING_RULES` seeded with all three modes, plus `FCT_PLAYER_SCORING`.
 5. `sql/35_season_agg.sql` — `AGG_PLAYER_SEASON` season totals and per-game/consistency metrics.
-6. `sql/40_defense.sql` — `FCT_TEAM_DEFENSE` roll-up.
+6. `sql/40_defense.sql` — `FCT_TEAM_DEFENSE_WEEK` and the `FCT_TEAM_DEFENSE` roll-up.
 7. `sql/50_ideal_team.sql` — the final ideal-team query.
 8. `sql/99_tests.sql` — the data-quality assertions from §6, including both reconciliations.
 9. Documented output: the ideal team board (10 QB / 25 RB / 25 WR / 25 TE / 1 K / 5 DEF) exported to CSV **once per scoring mode** and committed as a reference result.
 
-**Phase 1.5 — Season refresh for 2026**
-- The 2025 files are complete and static; the 2026 season re-runs Phase 0 weekly against `NFL-data-Players/2026/{week}/`.
-- `season` is already a column throughout, so this is a parameter change plus a scheduled job — not a rebuild. Multi-season comparison (2015–2024 are available in the identical layout) becomes a `WHERE season IN (...)` at that point.
+**Phase 1.5 — Season refresh for 2026 (done)**
+- One command per refresh, for any season and any subset of weeks:
 
-**Phase 1.6 — Team results feed (§5a)**
-- `sql/15_team_results.sql` + a Phase 0 downloader addition for the two nflverse assets, then `STG_TEAM_WEEK` and two extra `SCORING_RULES` rows for the points-allowed and yards-allowed tiers.
-- Deliberately sequenced *after* Phase 1 rather than inside it: the DEF board is usable without it, and keeping the second source separate means a broken upstream release never blocks the core rankings.
+  ```bash
+  python -m pipeline.download --season 2026 --weeks 1-18 --nflverse --put-to-stage
+  python -m pipeline.run_sql  --season 2026 --all
+  ```
+
+- Re-running is safe. The downloader only rewrites a file whose bytes changed, and every load **deletes just the target season** before re-inserting it instead of truncating the table, so 2024 and 2025 coexist and a mid-season weekly refresh cannot duplicate rows. Weeks the source has not published yet are reported as `missing` rather than failing the run (2024, for instance, stops at week 16 upstream).
+- `--season` sets the `TARGET_SEASON` session variable that every SQL file reads, so the board rebuilds for the requested season while older seasons stay queryable in RAW/STAGING for `WHERE season IN (...)` comparisons (2015–2024 are available in the identical layout).
+
+**Phase 1.6 — Team results feed (§5a) (done)**
+- `pipeline/download.py --nflverse` fetches the two assets; `sql/15_team_results.sql` loads and normalizes them into `STG_TEAM_WEEK`; `sql/30_scoring.sql` seeds `MARTS.DEF_TIERS`; `sql/40_defense.sql` scores each defense week as `idp_pts + points_allowed_pts + yards_allowed_pts` and rolls it up.
+- Deliberately sequenced *after* Phase 1 rather than inside it: the DEF board is usable without it, and keeping the second source separate means a broken upstream release never blocks the core rankings — the local harness still runs, IDP-only, when the feed is absent.
+- Live results and the verification run: `reference/PHASE15_16_SNOWFLAKE_RUN.md`.
 
 **Phase 2 — Front end (future)** — stack recommendation in §8
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
@@ -538,16 +579,16 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | Mobile | Responsive web from the first release; native iOS/Android is a distant Phase 4 (§7, §8) |
 | Default scoring mode | **Standard** is the landing default; a toggle switches to half/full PPR live. All three stay precomputed, so the toggle is a filter, not a recalculation (§4, §8) |
 | Playoff weeks | **Highlighted, not separated.** Weeks 15–18 are flagged `is_playoff` and called out visually, but season totals and rankings still include them (§3, §8) |
-| Points allowed / yards allowed | **Yes, addable.** hvpkod has no team file, but nflverse-data supplies both; scheduled as Phase 1.6 (§5a) |
+| Points allowed / yards allowed | **Added.** hvpkod has no team file, so both come from nflverse-data — Phase 1.6, now live (§5a) |
 
 ### Still open
 
-1. **Which offensive-yards definition counts as "yards allowed"** — nflverse's team-week splits let you include or exclude sack yardage and return yardage, and leagues differ. Minor, but it moves defenses across tier boundaries.
+1. ~~**Which offensive-yards definition counts as "yards allowed"**~~ — **decided in Phase 1.6**: net yards, `passing_yards + sack_yards_lost + rushing_yards` (sack yardage is negative in the source, so sacks reduce what the defense is charged), return yardage excluded. This is the definition the major fantasy sites use. It is one expression in `sql/15_team_results.sql` if the league disagrees.
 2. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
 
 ---
 
-## 12. Implementation status (Phase 0 + Phase 1)
+## 12. Implementation status (Phases 0, 1, 1.5, 1.6)
 
 | Piece | State |
 | --- | --- |
@@ -556,8 +597,11 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | `pipeline/validate_scoring.py` | **Built and run.** Runs the same tall-shape + rules-join logic in pandas, prints all three boards, and runs the §6 assertions |
 | `sql/00…99_*.sql` | **Run end-to-end on Snowflake** for 2025: 152 files staged, 47,032 raw rows, 76,359 staging rows, 141,096 scored player-weeks, 273 `IDEAL_TEAM` rows (91 slots × 3 modes). All nine error-level checks return 0 |
 | Reference boards | `reference/ideal_team_2025_{standard,half_ppr,full_ppr}.csv`, produced by the harness; all 273 Snowflake `IDEAL_TEAM` rows match them exactly. Run log: `reference/PHASE1_SNOWFLAKE_RUN.md` |
-| `sql/05_git_repository.sql` | **Run.** `FANTASY.REPO.AB_PRJCTS_2026` mounts the GitHub repo in Snowsight; `sql/` is only visible on `main` once PR #8 merges, so until then use the feature branch path |
-| Phases 1.5, 1.6, 2, 3, 4 | Not started |
+| `sql/05_git_repository.sql` | **Run.** `FANTASY.REPO.AB_PRJCTS_2026` mounts the GitHub repo in Snowsight; re-run `ALTER GIT REPOSITORY … FETCH` after each push |
+| `pipeline/run_sql.py` | **Built and run.** Executes the SQL files in order against Snowflake and sets `TARGET_SEASON` from `--season` |
+| Phase 1.5 (`--season` everywhere, per-season deletes) | **Done and verified live**: 2024 loaded alongside 2025 without disturbing it, re-runs produce no duplicates |
+| Phase 1.6 (nflverse team results) | **Done and verified live**: 544 regular-season team-weeks for 2025, full join coverage, DEF board rebuilt on IDP + tier points. Run log: `reference/PHASE15_16_SNOWFLAKE_RUN.md` |
+| Phases 2, 3, 4 | Not started |
 
 The harness is a verification tool, not a second pipeline: it exists so the scoring rules and the
 reconciliations could be checked before the SQL ever runs. Scoring truth stays in `SCORING_RULES`.
@@ -580,8 +624,9 @@ reconciliations could be checked before the SQL ever runs. Scoring truth stays i
    Excluding bye rows from `games_played` (§3) still does the right thing, but the flag should be read as
    "did not play", not "team was on bye".
 
-Two smaller notes: the 2025 team abbreviations are already clean (32 codes + `FA`, no `JAC`/`WSH`/`LA`
-variants), so §5's normalization table is currently an identity map kept for the Phase 1.6 nflverse join;
+Two smaller notes: the 2025 hvpkod team abbreviations are already clean (32 codes + `FA`, no `JAC`/`WSH`/`LA`
+variants) — §5's normalization table earns its keep on the nflverse side instead, where `LA` → `LAR` rewrites
+the Rams' 17 team-weeks;
 and `season`/`week` regex parsing, uniqueness, `Pos` validity, position coverage and the zero-cast-failure
 assertion all pass on 2025.
 

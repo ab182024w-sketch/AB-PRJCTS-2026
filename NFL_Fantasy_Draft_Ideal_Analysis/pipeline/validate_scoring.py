@@ -29,11 +29,15 @@ from pipeline.scoring import (
     OFFENSE_RULES,
     OFFENSE_STAT_COLUMNS,
     PLAYOFF_WEEKS,
+    POINTS_ALLOWED_TIERS,
     POSITION_THRESHOLDS,
     SCORING_MODES,
     SLOT_DEPTH,
     STAT_COMPONENT,
+    YARDS_ALLOWED_TIERS,
+    normalize_team,
     rules_rows,
+    tier_points,
 )
 
 KEY_COLUMNS = ["PlayerName", "PlayerId", "Pos", "Team", "PlayerOpponent"]
@@ -146,20 +150,95 @@ def aggregate_season(scored: pd.DataFrame) -> pd.DataFrame:
     return agg.round(2)
 
 
-def team_defense(scored: pd.DataFrame) -> pd.DataFrame:
+def load_team_week(data_dir: Path, season: int) -> pd.DataFrame | None:
+    """STG_TEAM_WEEK: what each defense gave up, from the two nflverse assets.
+
+    Returns None when the feed has not been downloaded (`--nflverse`), which is
+    what keeps the harness usable on the Phase 1 data alone. Yards allowed is
+    the opponent's NET yards: sack yardage is already negative in the source, so
+    it adds (README §5a).
+    """
+    games_path = data_dir / "nflverse" / "games.csv"
+    team_week_path = data_dir / "nflverse" / str(season) / f"stats_team_week_{season}.csv"
+    if not games_path.exists() or not team_week_path.exists():
+        return None
+
+    games = pd.read_csv(games_path)
+    games = games[(games["season"] == season) & games["home_score"].notna() & games["away_score"].notna()]
+    sides = pd.concat(
+        [
+            pd.DataFrame({
+                "week": games["week"], "game_type": games["game_type"],
+                "team": games["away_team"], "opponent": games["home_team"],
+                "points_allowed": games["home_score"],
+            }),
+            pd.DataFrame({
+                "week": games["week"], "game_type": games["game_type"],
+                "team": games["home_team"], "opponent": games["away_team"],
+                "points_allowed": games["away_score"],
+            }),
+        ],
+        ignore_index=True,
+    )
+    sides["team"] = sides["team"].map(normalize_team)
+    sides["opponent"] = sides["opponent"].map(normalize_team)
+
+    stats = pd.read_csv(team_week_path)
+    yards = pd.DataFrame({
+        "week": stats["week"],
+        "opponent": stats["team"].map(normalize_team),
+        "yards_allowed": (
+            stats["passing_yards"].fillna(0)
+            + stats["sack_yards_lost"].fillna(0)     # already negative in the source
+            + stats["rushing_yards"].fillna(0)
+        ),
+    })
+
+    merged = sides.merge(yards, on=["week", "opponent"], how="left")
+    merged = merged[merged["game_type"] == "REG"]      # weeks 1-18, the fantasy season
+    merged["season"] = season
+    merged["points_allowed_pts"] = merged["points_allowed"].map(lambda v: tier_points(v, POINTS_ALLOWED_TIERS))
+    merged["yards_allowed_pts"] = merged["yards_allowed"].map(lambda v: tier_points(v, YARDS_ALLOWED_TIERS))
+    return merged[["season", "week", "team", "points_allowed", "yards_allowed", "points_allowed_pts", "yards_allowed_pts"]]
+
+
+def team_defense(scored: pd.DataFrame, team_week: pd.DataFrame | None = None) -> pd.DataFrame:
     """FCT_TEAM_DEFENSE: DB+LB+DL summed to the team, season grain.
 
     Excludes FA rows (no team attribution) and bye rows, so `weeks` is games
-    played (17), not calendar weeks (18).
+    played (17), not calendar weeks (18). When the team-results feed is present,
+    the points/yards-allowed tiers are added per week before the season sum —
+    the same order the SQL does it in, which matters because a tier is one bonus
+    per week, not a rate.
     """
     defense = scored[
         scored["pos"].isin(DEFENSE_POSITIONS)
         & (scored["team"] != "FA")
         & ~scored["is_bye"]
     ]
+    weekly = (
+        defense.groupby(["season", "week", "team", "scoring_mode"], observed=True)["def_pts"]
+        .sum()
+        .reset_index()
+        .rename(columns={"def_pts": "idp_pts"})
+    )
+    if team_week is None:
+        weekly["points_allowed_pts"] = 0.0
+        weekly["yards_allowed_pts"] = 0.0
+    else:
+        weekly = weekly.merge(team_week, on=["season", "week", "team"], how="left")
+        weekly[["points_allowed_pts", "yards_allowed_pts"]] = weekly[["points_allowed_pts", "yards_allowed_pts"]].fillna(0.0)
+    weekly["total_pts"] = weekly["idp_pts"] + weekly["points_allowed_pts"] + weekly["yards_allowed_pts"]
+
     return (
-        defense.groupby(["season", "team", "scoring_mode"], observed=True)
-        .agg(total_pts=("def_pts", "sum"), weeks=("week", "nunique"))
+        weekly.groupby(["season", "team", "scoring_mode"], observed=True)
+        .agg(
+            total_pts=("total_pts", "sum"),
+            idp_pts=("idp_pts", "sum"),
+            points_allowed_pts=("points_allowed_pts", "sum"),
+            yards_allowed_pts=("yards_allowed_pts", "sum"),
+            weeks=("week", "nunique"),
+        )
         .reset_index()
         .assign(pts_per_week=lambda d: (d["total_pts"] / d["weeks"]).round(2))
         .round(2)
@@ -305,12 +384,19 @@ def main(argv: list[str] | None = None) -> int:
     tall, cast_failures = load_player_weeks(args.data_dir, args.season)
     scored = score(tall)
     agg = aggregate_season(scored)
-    defense = team_defense(scored)
+    team_week = load_team_week(args.data_dir, args.season)
+    defense = team_defense(scored, team_week)
     board = ideal_team(agg, defense, SLOT_DEPTH)
 
     print(f"== load ==\nplayer-week rows: {tall.groupby(['week', 'player_id']).ngroups}  tall stat rows: {len(tall)}")
     print(f"cast failures (non-blank cells that failed to parse): {cast_failures}")
     print(f"bye rows: {tall[tall['is_bye']].groupby(['week', 'player_id']).ngroups}")
+    if team_week is None:
+        print("team results: NOT loaded — DEF board is IDP-only "
+              "(run: python -m pipeline.download --season {s} --nflverse)".format(s=args.season))
+    else:
+        print(f"team results: {len(team_week)} team-weeks, "
+              f"{team_week['yards_allowed'].isna().sum()} missing yards allowed")
 
     for mode in SCORING_MODES:
         print(f"\n===== scoring mode: {mode} =====")

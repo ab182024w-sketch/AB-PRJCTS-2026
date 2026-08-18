@@ -11,6 +11,11 @@ USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;
 USE SCHEMA STAGING;
 
+-- The season the reconciliations compare. The structural checks above run over
+-- every loaded season; the two reconciliations are season-scoped, because they
+-- join on player_id and a player appears in more than one season (Phase 1.5).
+SET target_season = COALESCE(GETVARIABLE('TARGET_SEASON')::NUMBER, 2025);
+
 CREATE OR REPLACE TABLE TEST_RESULTS (
     run_at          TIMESTAMP_NTZ,
     check_name      VARCHAR,
@@ -104,6 +109,80 @@ SELECT CURRENT_TIMESTAMP(), 'bye_rows_present', 'error',
 FROM STG_PLAYER_WEEK_HEADER
 
 UNION ALL
+-- ------------------------------------------- Phase 1.6 team results (§5a) ---
+-- (season, week, team) is unique: a duplicate here would double-count a
+-- defense's points-allowed bonus.
+SELECT CURRENT_TIMESTAMP(), 'team_week_grain_unique', 'error', COUNT(*),
+       'duplicate (season, week, team) keys in STG_TEAM_WEEK'
+FROM (
+    SELECT season, week, team
+    FROM STG_TEAM_WEEK
+    GROUP BY season, week, team
+    HAVING COUNT(*) > 1
+)
+
+UNION ALL
+-- Plausible team count per regular-season week: 32 minus whoever is on bye,
+-- and never more than 32.
+SELECT CURRENT_TIMESTAMP(), 'team_week_team_count_plausible', 'error', COUNT(*),
+       'regular-season weeks with an implausible number of teams'
+FROM (
+    SELECT season, week
+    FROM STG_TEAM_WEEK
+    WHERE season_type = 'REG'
+    GROUP BY season, week
+    HAVING COUNT(DISTINCT team) NOT BETWEEN 20 AND 32
+)
+
+UNION ALL
+-- nflverse abbreviations resolve through TEAM_ALIAS — this is what catches the
+-- Rams (LA vs LAR) if the crosswalk is ever dropped (README §5a).
+SELECT CURRENT_TIMESTAMP(), 'team_week_abbreviations_known', 'error', COUNT(*),
+       'STG_TEAM_WEEK rows whose team/opponent is not a known abbreviation'
+FROM STG_TEAM_WEEK w
+WHERE w.team     NOT IN (SELECT team FROM TEAM_ALIAS)
+   OR w.opponent NOT IN (SELECT team FROM TEAM_ALIAS)
+
+UNION ALL
+-- Join coverage between the two nflverse assets: a played game with no yards
+-- means the schedule and team-week releases disagree, which would silently
+-- hand out a 0-yard-tier bonus.
+SELECT CURRENT_TIMESTAMP(), 'yards_allowed_present', 'error', COUNT(*),
+       'played regular-season team-weeks with no opponent yardage row'
+FROM STG_TEAM_WEEK
+WHERE season_type = 'REG'
+  AND yards_allowed IS NULL
+
+UNION ALL
+-- Every outcome lands in exactly one band — no gap, no overlap.
+SELECT CURRENT_TIMESTAMP(), 'def_tier_bands_total', 'error', COUNT(*),
+       'team-weeks matching zero or multiple points/yards allowed bands'
+FROM (
+    SELECT
+        w.season, w.week, w.team,
+        (SELECT COUNT(*) FROM MARTS.DEF_TIERS d
+          WHERE d.metric = 'points_allowed'
+            AND w.points_allowed >= d.lower_bound
+            AND (d.upper_bound IS NULL OR w.points_allowed < d.upper_bound)) AS pts_bands,
+        (SELECT COUNT(*) FROM MARTS.DEF_TIERS d
+          WHERE d.metric = 'yards_allowed'
+            AND w.yards_allowed >= d.lower_bound
+            AND (d.upper_bound IS NULL OR w.yards_allowed < d.upper_bound))  AS yds_bands
+    FROM STG_TEAM_WEEK w
+    WHERE w.season_type = 'REG'
+)
+WHERE pts_bands <> 1 OR yds_bands <> 1
+
+UNION ALL
+-- The defense board's own coverage: every team-week that scored IDP points
+-- should also carry a team result, or the DEF ranking is comparing teams on
+-- different scoring rules.
+SELECT CURRENT_TIMESTAMP(), 'defense_team_result_coverage', 'error', COUNT(*),
+       'FCT_TEAM_DEFENSE_WEEK rows with no matching team result'
+FROM MARTS.FCT_TEAM_DEFENSE_WEEK
+WHERE NOT has_team_result
+
+UNION ALL
 -- ---------------------------------------------------------------------------
 -- Reconciliation 1 — against the source's own TotalPoints (README §6).
 -- Local finding, and the reason this is warn-level and week-filtered:
@@ -115,11 +194,13 @@ UNION ALL
 SELECT CURRENT_TIMESTAMP(), 'reconcile_total_points_half_ppr', 'warn', COUNT(*),
        'offensive/kicker player-weeks where half_ppr points differ from source TotalPoints by > 0.1'
 FROM MARTS.FCT_PLAYER_SCORING f
-WHERE f.scoring_mode = 'half_ppr'
+WHERE f.season = $target_season
+  AND f.scoring_mode = 'half_ppr'
   AND f.pos IN ('QB', 'RB', 'WR', 'TE', 'K')
   AND f.source_total_points IS NOT NULL
   AND f.week NOT IN (
         SELECT week FROM MARTS.FCT_PLAYER_SCORING
+        WHERE season = $target_season
         GROUP BY season, week
         HAVING SUM(COALESCE(source_total_points, 0)) = 0
       )
@@ -142,22 +223,25 @@ FROM (
         ANY_VALUE(s.season_value)       AS theirs
     FROM STG_PLAYER_WEEK w
     JOIN (
-        SELECT player_id, 'passing_yds' AS stat, TRY_TO_DOUBLE(passing_yds) AS season_value FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'passing_td',    TRY_TO_DOUBLE(passing_td)    FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'passing_int',   TRY_TO_DOUBLE(passing_int)   FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'rushing_yds',   TRY_TO_DOUBLE(rushing_yds)   FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'rushing_td',    TRY_TO_DOUBLE(rushing_td)    FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'receiving_rec', TRY_TO_DOUBLE(receiving_rec) FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'receiving_yds', TRY_TO_DOUBLE(receiving_yds) FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'receiving_td',  TRY_TO_DOUBLE(receiving_td)  FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'fum',           TRY_TO_DOUBLE(fum)           FROM RAW.OFFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'pat_made',      TRY_TO_DOUBLE(pat_made)      FROM RAW.K_SEASON_RAW
-        UNION ALL SELECT player_id, 'fg_made_40_49', TRY_TO_DOUBLE(fg_made_40_49) FROM RAW.K_SEASON_RAW
-        UNION ALL SELECT player_id, 'fg_made_50',    TRY_TO_DOUBLE(fg_made_50)    FROM RAW.K_SEASON_RAW
-        UNION ALL SELECT player_id, 'tackles_sck',   TRY_TO_DOUBLE(tackles_sck)   FROM RAW.DEFENSE_SEASON_RAW
-        UNION ALL SELECT player_id, 'turnover_int',  TRY_TO_DOUBLE(turnover_int)  FROM RAW.DEFENSE_SEASON_RAW
+        SELECT player_id, source_file, 'passing_yds' AS stat, TRY_TO_DOUBLE(passing_yds) AS season_value FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'passing_td',    TRY_TO_DOUBLE(passing_td)    FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'passing_int',   TRY_TO_DOUBLE(passing_int)   FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'rushing_yds',   TRY_TO_DOUBLE(rushing_yds)   FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'rushing_td',    TRY_TO_DOUBLE(rushing_td)    FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'receiving_rec', TRY_TO_DOUBLE(receiving_rec) FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'receiving_yds', TRY_TO_DOUBLE(receiving_yds) FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'receiving_td',  TRY_TO_DOUBLE(receiving_td)  FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'fum',           TRY_TO_DOUBLE(fum)           FROM RAW.OFFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'pat_made',      TRY_TO_DOUBLE(pat_made)      FROM RAW.K_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'fg_made_40_49', TRY_TO_DOUBLE(fg_made_40_49) FROM RAW.K_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'fg_made_50',    TRY_TO_DOUBLE(fg_made_50)    FROM RAW.K_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'tackles_sck',   TRY_TO_DOUBLE(tackles_sck)   FROM RAW.DEFENSE_SEASON_RAW
+        UNION ALL SELECT player_id, source_file, 'turnover_int',  TRY_TO_DOUBLE(turnover_int)  FROM RAW.DEFENSE_SEASON_RAW
     ) s
-      ON s.player_id = w.player_id AND s.stat = w.stat
+      ON s.player_id = w.player_id
+     AND s.stat = w.stat
+     AND s.source_file LIKE '%' || $target_season || '/%'
+    WHERE w.season = $target_season
     GROUP BY w.player_id, w.stat
     HAVING ABS(SUM(w.value) - ANY_VALUE(s.season_value)) > 1
 );

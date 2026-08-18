@@ -1,5 +1,5 @@
 pandas>=2.0
 requests>=2.31
 
-# Only needed for pipeline.download --put-to-stage
-# snowflake-connector-python>=3.7
+# Needed by pipeline.run_sql and pipeline.download --put-to-stage
+snowflake-connector-python>=3.7

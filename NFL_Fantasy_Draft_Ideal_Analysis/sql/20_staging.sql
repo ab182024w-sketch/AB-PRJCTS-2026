@@ -11,34 +11,8 @@ USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;
 USE SCHEMA STAGING;
 
--- Team abbreviation normalization. hvpkod's 2025 files were checked and are
--- already clean (32 abbreviations + 'FA'), so this table is currently an
--- identity map; it exists because the Phase 1.6 nflverse join needs LA -> LAR,
--- and because older seasons are not guaranteed to be as tidy (README §5, §5a).
-CREATE TABLE IF NOT EXISTS TEAM_ALIAS (
-    raw_team    VARCHAR NOT NULL PRIMARY KEY,
-    team        VARCHAR NOT NULL
-);
-
-MERGE INTO TEAM_ALIAS t
-USING (
-    SELECT * FROM VALUES
-        ('JAC', 'JAX'), ('JAX', 'JAX'),
-        ('LA',  'LAR'), ('LAR', 'LAR'),
-        ('WSH', 'WAS'), ('WFT', 'WAS'), ('WAS', 'WAS'),
-        ('SD',  'LAC'), ('LAC', 'LAC'),
-        ('OAK', 'LV'),  ('LV',  'LV'),
-        ('STL', 'LAR'),
-        ('ARI','ARI'),('ATL','ATL'),('BAL','BAL'),('BUF','BUF'),('CAR','CAR'),
-        ('CHI','CHI'),('CIN','CIN'),('CLE','CLE'),('DAL','DAL'),('DEN','DEN'),
-        ('DET','DET'),('GB','GB'),('HOU','HOU'),('IND','IND'),('KC','KC'),
-        ('MIA','MIA'),('MIN','MIN'),('NE','NE'),('NO','NO'),('NYG','NYG'),
-        ('NYJ','NYJ'),('PHI','PHI'),('PIT','PIT'),('SEA','SEA'),('SF','SF'),
-        ('TB','TB'),('TEN','TEN'),('FA','FA')
-    AS v(raw_team, team)
-) s ON t.raw_team = s.raw_team
-WHEN MATCHED THEN UPDATE SET t.team = s.team
-WHEN NOT MATCHED THEN INSERT (raw_team, team) VALUES (s.raw_team, s.team);
+-- TEAM_ALIAS (the abbreviation crosswalk both feeds join to) is created and
+-- seeded in 00_setup.sql, because 15_team_results.sql needs it too.
 
 -- Header-level attributes, deduplicated on the true grain (season, week,
 -- player_id), keeping the last loaded row (README §3).

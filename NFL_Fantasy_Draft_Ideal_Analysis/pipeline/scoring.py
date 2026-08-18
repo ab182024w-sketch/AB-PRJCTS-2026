@@ -131,6 +131,62 @@ STAT_COMPONENT: dict[str, str] = {
     **{s: "def_pts" for s in DEFENSE_RULES},
 }
 
+# Abbreviation crosswalk, the Python mirror of STAGING.TEAM_ALIAS
+# (sql/00_setup.sql). Only entries that actually change something are listed;
+# anything else passes through unchanged. nflverse calls the Rams LA, while LAC
+# is the Chargers on both sides and must not be folded into it (README §5a).
+TEAM_ALIAS = {
+    "JAC": "JAX",
+    "LA": "LAR",
+    "STL": "LAR",
+    "WSH": "WAS",
+    "WFT": "WAS",
+    "SD": "LAC",
+    "OAK": "LV",
+}
+
+
+def normalize_team(team: str) -> str:
+    return TEAM_ALIAS.get(team.strip().upper(), team.strip().upper())
+
+
+# Team-defense tiers, the Python mirror of MARTS.DEF_TIERS (sql/30_scoring.sql).
+# (lower_bound, upper_bound, points) with the upper bound exclusive and None
+# meaning unbounded, so the bands cannot gap or overlap. Not per-unit rates —
+# 14 points allowed is not 14x the value of 1 — and identical across all three
+# modes, since PPR changes what a reception is worth, not what a shutout is
+# (README §4, §5a).
+POINTS_ALLOWED_TIERS: tuple[tuple[int, int | None, float], ...] = (
+    (0, 1, 10.0),
+    (1, 7, 7.0),
+    (7, 14, 4.0),
+    (14, 21, 1.0),
+    (21, 28, 0.0),
+    (28, 35, -1.0),
+    (35, None, -4.0),
+)
+
+YARDS_ALLOWED_TIERS: tuple[tuple[int, int | None, float], ...] = (
+    (0, 100, 5.0),
+    (100, 200, 3.0),
+    (200, 300, 2.0),
+    (300, 350, 0.0),
+    (350, 400, -1.0),
+    (400, 450, -3.0),
+    (450, None, -5.0),
+)
+
+
+def tier_points(value: float | None, tiers: tuple[tuple[int, int | None, float], ...]) -> float:
+    """The single band `value` falls in. A missing outcome scores nothing."""
+    if value is None or value != value:  # NaN
+        return 0.0
+    for lower, upper, points in tiers:
+        if value >= lower and (upper is None or value < upper):
+            return points
+    return 0.0
+
+
 PLAYOFF_WEEKS = (15, 16, 17, 18)
 
 # Startable-game cutoffs for `weeks_above_threshold` (README §3).

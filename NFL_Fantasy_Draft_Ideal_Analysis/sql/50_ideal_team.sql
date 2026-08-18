@@ -30,8 +30,11 @@ WHEN NOT MATCHED THEN INSERT (slot, depth, sort_order) VALUES (s.slot, s.depth, 
 
 -- Minimum-games filter: a parameter defaulting to no filter for the headline
 -- board (README §3). Set the session variable before running to apply one.
-SET min_games = 0;
-SET target_season = 2025;
+SET min_games = COALESCE(GETVARIABLE('MIN_GAMES')::NUMBER, 0);
+-- Season parameter (README §7, Phase 1.5): set by `run_sql.py --season 2026`,
+-- defaulting to 2025 in a bare Snowsight worksheet. The marts hold every
+-- season that has been loaded; only this board narrows to one.
+SET target_season = COALESCE(GETVARIABLE('TARGET_SEASON')::NUMBER, 2025);
 
 CREATE OR REPLACE TABLE IDEAL_TEAM AS
 WITH candidates AS (
@@ -68,7 +71,7 @@ WITH candidates AS (
         d.team,
         d.total_pts,
         d.weeks_played          AS games_played,
-        d.pts_per_week          AS pts_per_game,
+        d.pts_per_week          AS pts_per_game,   -- includes the Phase 1.6 tiers
         d.stddev_pts,
         NULL                    AS floor_pts,
         NULL                    AS ceiling_pts,

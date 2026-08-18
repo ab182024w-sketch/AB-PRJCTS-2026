@@ -127,6 +127,45 @@ WHEN MATCHED THEN UPDATE SET points_per_unit = s.points_per_unit, component = s.
 WHEN NOT MATCHED THEN INSERT (scoring_mode, stat, points_per_unit, component)
      VALUES (s.scoring_mode, s.stat, s.points_per_unit, s.component);
 
+-- Team-defense tiers (README §4, §5a, Phase 1.6). These are not per-unit rates
+-- — 14 points allowed is not 14× the value of 1 — so they are a banded lookup
+-- rather than SCORING_RULES rows: one bonus per team per week, awarded by which
+-- band the game's outcome falls in. Bands are half-open [lo, hi) with hi NULL
+-- meaning "and above", so no gap or overlap is possible.
+-- Identical across all three modes, which is why scoring_mode is absent: PPR
+-- changes what a reception is worth, not what a shutout is worth.
+CREATE TABLE IF NOT EXISTS DEF_TIERS (
+    metric      VARCHAR NOT NULL,   -- points_allowed | yards_allowed
+    lower_bound NUMBER  NOT NULL,
+    upper_bound NUMBER,             -- exclusive; NULL = unbounded
+    points      FLOAT   NOT NULL,
+    PRIMARY KEY (metric, lower_bound)
+);
+
+MERGE INTO DEF_TIERS t
+USING (
+    SELECT * FROM VALUES
+        ('points_allowed',   0,    1,  10),   -- shutout
+        ('points_allowed',   1,    7,   7),
+        ('points_allowed',   7,   14,   4),
+        ('points_allowed',  14,   21,   1),
+        ('points_allowed',  21,   28,   0),
+        ('points_allowed',  28,   35,  -1),
+        ('points_allowed',  35, NULL,  -4),
+        ('yards_allowed',    0,  100,   5),
+        ('yards_allowed',  100,  200,   3),
+        ('yards_allowed',  200,  300,   2),
+        ('yards_allowed',  300,  350,   0),
+        ('yards_allowed',  350,  400,  -1),
+        ('yards_allowed',  400,  450,  -3),
+        ('yards_allowed',  450, NULL,  -5)
+    AS v(metric, lower_bound, upper_bound, points)
+) s
+   ON t.metric = s.metric AND t.lower_bound = s.lower_bound
+WHEN MATCHED THEN UPDATE SET upper_bound = s.upper_bound, points = s.points
+WHEN NOT MATCHED THEN INSERT (metric, lower_bound, upper_bound, points)
+     VALUES (s.metric, s.lower_bound, s.upper_bound, s.points);
+
 -- One row per (season, week, player_id, scoring_mode), with each component
 -- broken out so a surprising ranking can be explained rather than trusted.
 -- Built from the header cross-joined to the modes and LEFT JOINed to the stats,
