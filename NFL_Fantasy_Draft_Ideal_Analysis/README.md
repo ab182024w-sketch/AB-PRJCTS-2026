@@ -338,6 +338,7 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 - A scheduled Python scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
 - Outputs a "waiver targets" view: high season/per-game points, low roster percentage, favorable upcoming opponent.
 - Snapshots are stored as a time series so week-over-week roster-percentage *movement* is visible, not only the latest state.
+- **Front-end component (§8, "Waiver views").** The scraper is not a CSV drop — waiver data gets its own pages in the same Streamlit app as the rankings: a ranked *Waiver Targets* board, a per-player roster-percentage trend chart, and a *Risers & Fallers* view driven by week-over-week delta. Shares the app, the theme, and the mobile layout rules; no second front end.
 
 **Phase 4 — iOS / Android beta (very distant — target: end of the 2026–27 season at the earliest)**
 - Explicitly gated behind Phases 1–3 being complete and *working*. Feature-correctness on the web comes first; a native app that wraps a half-finished pipeline is two problems instead of one.
@@ -377,7 +378,7 @@ Rough shape:
 
 ```python
 # app.py
-ppr = st.sidebar.select_slider("PPR", options=[0.0, 0.5, 1.0], value=1.0)
+ppr = st.sidebar.select_slider("PPR", options=[0.0, 0.5, 1.0], value=0.0)  # standard default
 min_games = st.sidebar.slider("Minimum games", 0, 17, 0)
 
 board = session.call("MARTS.IDEAL_TEAM", ppr, min_games).to_pandas()
@@ -415,6 +416,22 @@ What that means concretely for a table-heavy app:
 - Charts get a minimum touch-target size and are made scrollable rather than compressed.
 
 Streamlit is responsive enough for this with `st.columns` breakpoints and `use_container_width=True` everywhere, but it needs deliberate layout work — the default wide-table rendering is not usable on a phone. If mobile ergonomics ever become the dominant constraint, that is a legitimate trigger for the FastAPI + React path above, where the layout is fully controllable.
+
+### Waiver views (Phase 3 front end)
+
+The waiver-wire feature (§9) surfaces in the *same* Streamlit app rather than a separate tool — it is the same data, the same auth, and the same deployment, and a waiver target is only meaningful next to the ranking that says the player is good.
+
+| Page | Content |
+| --- | --- |
+| **Waiver targets** | The core board: players sorted by points-per-game, filtered to below a roster-percentage threshold (a slider, default ~50%), with position and min-games filters. Each row shows season points, points-per-game, roster %, the week-over-week delta, and the upcoming opponent. |
+| **Risers & fallers** | Sorted by roster-percentage *delta* rather than level — this is what catches a breakout before it is universally rostered. Falling players are the drop candidates. |
+| **Player trend** | Roster percentage over time as a line chart, overlaid on that player's weekly fantasy points. The interesting shape is production rising while roster percentage lags. |
+
+Design rules specific to these pages:
+- **Always show `scraped_at`.** Waiver data is stale the moment it is scraped; a board that does not say how old it is invites bad decisions. A staleness warning appears if the latest snapshot is more than a few days old.
+- **Degrade, do not break.** If a scrape fails or has never run, the waiver pages show an explicit empty state; the rankings pages must keep working regardless — the scraper is the least reliable component in the system and cannot be allowed to take the dashboard down with it.
+- **Same mobile treatment** as the ranking tables (card layout on narrow viewports, prioritized columns) — checking the waiver wire on a phone is arguably the *primary* use case for this feature, since it is what you do away from a desk during the week.
+- The scoring-mode toggle applies here too: who is worth adding depends on whether receptions score.
 
 ### Making the dashboard public
 
