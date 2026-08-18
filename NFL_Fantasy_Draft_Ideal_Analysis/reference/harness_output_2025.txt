@@ -1,0 +1,269 @@
+player-week rows: 47032  tall stat rows: 885174
+cast failures (non-blank cells that failed to parse): 0
+bye rows: 12619
+
+===== scoring mode: standard =====
+
+-- QB top 10 --
+ slot_rank      player_name team  total_pts  games_played  pts_per_game
+         1       Josh Allen  BUF     356.62            17         20.98
+         2 Matthew Stafford  LAR     342.38            17         20.14
+         3       Drake Maye   NE     340.96            17         20.06
+         4  Trevor Lawrence  JAX     334.18            17         19.66
+         5     Dak Prescott  DAL     305.78            17         17.99
+         6   Caleb Williams  CHI     302.18            17         17.78
+         7           Bo Nix  DEN     300.84            17         17.70
+         8       Jared Goff  DET     295.06            17         17.36
+         9      Jalen Hurts  PHI     291.06            17         17.12
+        10  Patrick Mahomes   KC     278.68            17         16.39
+
+-- RB top 10 --
+ slot_rank         player_name team  total_pts  games_played  pts_per_game
+         1     Jonathan Taylor  IND      314.3            17         18.49
+         2 Christian McCaffrey   SF      310.6            17         18.27
+         3      Bijan Robinson  ATL      289.8            17         17.05
+         4        Jahmyr Gibbs  DET      287.9            17         16.94
+         5          James Cook  BUF      263.2            17         15.48
+         6       Derrick Henry  BAL      262.5            17         15.44
+         7       De'Von Achane  MIA      253.8            17         14.93
+         8      Kyren Williams  LAR      227.3            17         13.37
+         9      Travis Etienne  JAX      215.9            17         12.70
+        10         Chase Brown  CIN      209.6            17         12.33
+
+-- WR top 10 --
+ slot_rank        player_name team  total_pts  games_played  pts_per_game
+         1         Puka Nacua  LAR      246.0            17         14.47
+         2 Jaxon Smith-Njigba  SEA      236.9            17         13.94
+         3  Amon-Ra St. Brown  DET      205.0            17         12.06
+         4     George Pickens  DAL      190.9            17         11.23
+         5      Ja'Marr Chase  CIN      188.6            17         11.09
+         6        Chris Olave   NO      168.0            17          9.88
+         7      Davante Adams  LAR      162.9            17          9.58
+         8        Zay Flowers  BAL      157.3            17          9.25
+         9       Nico Collins  HOU      155.2            17          9.13
+        10   Jameson Williams  DET      154.9            17          9.11
+
+-- TE top 10 --
+ slot_rank       player_name team  total_pts  games_played  pts_per_game
+         1      Trey McBride  ARI      189.9            17         11.17
+         2    Dallas Goedert  PHI      125.1            17          7.36
+         3        Kyle Pitts  ATL      122.8            17          7.22
+         4      Hunter Henry   NE      118.8            17          6.99
+         5      Travis Kelce   KC      115.2            17          6.78
+         6 Harold Fannin Jr.  CLE      114.4            17          6.73
+         7      Brock Bowers   LV      112.2            17          6.60
+         8      Tyler Warren  IND      110.5            17          6.50
+         9  Colston Loveland  CHI      107.1            17          6.30
+        10     George Kittle   SF      104.5            17          6.15
+
+-- K top 1 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1 Jason Myers  SEA      200.0            17         11.76
+
+-- DEF top 5 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1    HOU D/ST  HOU      144.0            18          8.00
+         2    PIT D/ST  PIT      138.0            18          7.67
+         3    CLE D/ST  CLE      132.0            18          7.33
+         4    SEA D/ST  SEA      129.0            18          7.17
+         5    CHI D/ST  CHI      129.0            18          7.17
+
+===== scoring mode: half_ppr =====
+
+-- QB top 10 --
+ slot_rank      player_name team  total_pts  games_played  pts_per_game
+         1       Josh Allen  BUF     356.62            17         20.98
+         2 Matthew Stafford  LAR     342.38            17         20.14
+         3       Drake Maye   NE     341.46            17         20.09
+         4  Trevor Lawrence  JAX     334.18            17         19.66
+         5     Dak Prescott  DAL     305.78            17         17.99
+         6   Caleb Williams  CHI     303.18            17         17.83
+         7           Bo Nix  DEN     300.84            17         17.70
+         8       Jared Goff  DET     295.06            17         17.36
+         9      Jalen Hurts  PHI     291.06            17         17.12
+        10  Patrick Mahomes   KC     279.18            17         16.42
+
+-- RB top 10 --
+ slot_rank         player_name team  total_pts  games_played  pts_per_game
+         1 Christian McCaffrey   SF      361.6            17         21.27
+         2     Jonathan Taylor  IND      337.3            17         19.84
+         3      Bijan Robinson  ATL      329.3            17         19.37
+         4        Jahmyr Gibbs  DET      326.4            17         19.20
+         5       De'Von Achane  MIA      287.3            17         16.90
+         6          James Cook  BUF      279.7            17         16.45
+         7       Derrick Henry  BAL      270.0            17         15.88
+         8      Kyren Williams  LAR      245.3            17         14.43
+         9         Chase Brown  CIN      244.1            17         14.36
+        10      Travis Etienne  JAX      233.9            17         13.76
+
+-- WR top 10 --
+ slot_rank        player_name team  total_pts  games_played  pts_per_game
+         1         Puka Nacua  LAR      310.5            17         18.26
+         2 Jaxon Smith-Njigba  SEA      296.4            17         17.44
+         3  Amon-Ra St. Brown  DET      263.5            17         15.50
+         4      Ja'Marr Chase  CIN      251.1            17         14.77
+         5     George Pickens  DAL      237.4            17         13.96
+         6        Chris Olave   NO      218.0            17         12.82
+         7        Zay Flowers  BAL      200.3            17         11.78
+         8      Davante Adams  LAR      192.9            17         11.35
+         9       Nico Collins  HOU      190.7            17         11.22
+        10   Jameson Williams  DET      187.4            17         11.02
+
+-- TE top 10 --
+ slot_rank       player_name team  total_pts  games_played  pts_per_game
+         1      Trey McBride  ARI      252.9            17         14.88
+         2        Kyle Pitts  ATL      166.8            17          9.81
+         3    Dallas Goedert  PHI      155.1            17          9.12
+         4      Travis Kelce   KC      153.2            17          9.01
+         5 Harold Fannin Jr.  CLE      150.4            17          8.85
+         6      Hunter Henry   NE      148.8            17          8.75
+         7      Tyler Warren  IND      148.5            17          8.74
+         8     Jake Ferguson  DAL      145.1            17          8.54
+         9      Brock Bowers   LV      144.2            17          8.48
+        10     Juwan Johnson   NO      141.4            17          8.32
+
+-- K top 1 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1 Jason Myers  SEA      200.0            17         11.76
+
+-- DEF top 5 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1    HOU D/ST  HOU      144.0            18          8.00
+         2    PIT D/ST  PIT      138.0            18          7.67
+         3    CLE D/ST  CLE      132.0            18          7.33
+         4    CHI D/ST  CHI      129.0            18          7.17
+         5    SEA D/ST  SEA      129.0            18          7.17
+
+===== scoring mode: full_ppr =====
+
+-- QB top 10 --
+ slot_rank      player_name team  total_pts  games_played  pts_per_game
+         1       Josh Allen  BUF     356.62            17         20.98
+         2 Matthew Stafford  LAR     342.38            17         20.14
+         3       Drake Maye   NE     341.96            17         20.12
+         4  Trevor Lawrence  JAX     334.18            17         19.66
+         5     Dak Prescott  DAL     305.78            17         17.99
+         6   Caleb Williams  CHI     304.18            17         17.89
+         7           Bo Nix  DEN     300.84            17         17.70
+         8       Jared Goff  DET     295.06            17         17.36
+         9      Jalen Hurts  PHI     291.06            17         17.12
+        10  Patrick Mahomes   KC     279.68            17         16.45
+
+-- RB top 10 --
+ slot_rank         player_name team  total_pts  games_played  pts_per_game
+         1 Christian McCaffrey   SF      412.6            17         24.27
+         2      Bijan Robinson  ATL      368.8            17         21.69
+         3        Jahmyr Gibbs  DET      364.9            17         21.46
+         4     Jonathan Taylor  IND      360.3            17         21.19
+         5       De'Von Achane  MIA      320.8            17         18.87
+         6          James Cook  BUF      296.2            17         17.42
+         7         Chase Brown  CIN      278.6            17         16.39
+         8       Derrick Henry  BAL      277.5            17         16.32
+         9      Kyren Williams  LAR      263.3            17         15.49
+        10      Travis Etienne  JAX      251.9            17         14.82
+
+-- WR top 10 --
+ slot_rank        player_name team  total_pts  games_played  pts_per_game
+         1         Puka Nacua  LAR      375.0            17         22.06
+         2 Jaxon Smith-Njigba  SEA      355.9            17         20.94
+         3  Amon-Ra St. Brown  DET      322.0            17         18.94
+         4      Ja'Marr Chase  CIN      313.6            17         18.45
+         5     George Pickens  DAL      283.9            17         16.70
+         6        Chris Olave   NO      268.0            17         15.76
+         7        Zay Flowers  BAL      243.3            17         14.31
+         8       Nico Collins  HOU      226.2            17         13.31
+         9      Davante Adams  LAR      222.9            17         13.11
+        10     Michael Wilson  ARI      220.6            17         12.98
+
+-- TE top 10 --
+ slot_rank       player_name team  total_pts  games_played  pts_per_game
+         1      Trey McBride  ARI      315.9            17         18.58
+         2        Kyle Pitts  ATL      210.8            17         12.40
+         3      Travis Kelce   KC      191.2            17         11.25
+         4      Tyler Warren  IND      186.5            17         10.97
+         5 Harold Fannin Jr.  CLE      186.4            17         10.96
+         6     Jake Ferguson  DAL      186.1            17         10.95
+         7    Dallas Goedert  PHI      185.1            17         10.89
+         8     Juwan Johnson   NO      179.9            17         10.58
+         9      Hunter Henry   NE      178.8            17         10.52
+        10      Brock Bowers   LV      176.2            17         10.36
+
+-- K top 1 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1 Jason Myers  SEA      200.0            17         11.76
+
+-- DEF top 5 --
+ slot_rank player_name team  total_pts  games_played  pts_per_game
+         1    HOU D/ST  HOU      144.0            18          8.00
+         2    PIT D/ST  PIT      138.0            18          7.67
+         3    CLE D/ST  CLE      132.0            18          7.33
+         4    SEA D/ST  SEA      129.0            18          7.17
+         5    CHI D/ST  CHI      129.0            18          7.17
+
+===== README §6 assertions =====
+                           check  failures status
+              season_week_parsed         0   pass
+                    grain_unique         0   pass
+               key_columns_valid         0   pass
+all_positions_present_every_week         0   pass
+                no_cast_failures         0   pass
+           games_played_in_range         0   pass
+           passing_yds_under_700         0   pass
+        sacks_are_half_multiples         0   pass
+                bye_rows_present         0   pass
+              weeks_covered_1_18         0   pass
+
+===== reconciliation vs source TotalPoints =====
+weeks excluded (source published stats but left TotalPoints at 0): [18]
+scoring_mode pos  rows  mean_diff  median_diff  pct_within_0_1  max_abs_diff
+    full_ppr  DB 10741     -2.041          0.0          65.096          24.3
+    full_ppr  DL  8279     -1.401          0.0          63.776          28.8
+    full_ppr   K   977      0.090          0.0          87.410           4.0
+    full_ppr  LB  6870     -2.356          0.0          58.428          31.0
+    full_ppr  QB  2217     -0.045          0.0          94.723           6.0
+    full_ppr  RB  4104      0.156          0.0          73.928           5.5
+    full_ppr  TE  3705      0.270          0.0          71.201           6.5
+    full_ppr  WR  7513      0.312          0.0          75.003           8.0
+    half_ppr  DB 10741     -2.041          0.0          65.096          24.3
+    half_ppr  DL  8279     -1.401          0.0          63.776          28.8
+    half_ppr   K   977      0.090          0.0          87.410           4.0
+    half_ppr  LB  6870     -2.356          0.0          58.428          31.0
+    half_ppr  QB  2217     -0.047          0.0          95.083           6.0
+    half_ppr  RB  4104     -0.110          0.0          92.154           6.0
+    half_ppr  TE  3705     -0.095          0.0          93.387           5.6
+    half_ppr  WR  7513     -0.068          0.0          95.501           7.5
+    standard  DB 10741     -2.041          0.0          65.096          24.3
+    standard  DL  8279     -1.401          0.0          63.776          28.8
+    standard   K   977      0.090          0.0          87.410           4.0
+    standard  LB  6870     -2.356          0.0          58.428          31.0
+    standard  QB  2217     -0.049          0.0          94.723           6.0
+    standard  RB  4104     -0.375          0.0          73.319           7.5
+    standard  TE  3705     -0.460          0.0          70.499           7.0
+    standard  WR  7513     -0.447          0.0          74.537           8.5
+
+===== reconciliation vs {POS}_season.csv (per-stat sums) =====
+pos               stat  rows  mismatches  max_abs_diff
+ LB        tackles_ast   406          34           2.0
+ DB        tackles_ast   634          29           2.0
+ DL        tackles_ast   492          29           3.0
+ LB        tackles_tot   406          18           1.0
+ DB        tackles_tot   634          13           1.0
+ DB               pdef   634          12           1.0
+ DL        tackles_tot   492          10           2.0
+ WR          rz_target   443           9           5.0
+ WR            targets   443           9          26.0
+ DL             qb_hit   492           6           3.0
+ RB           rz_touch   242           4           4.0
+ WR targets_receptions   443           4          15.0
+ WR   touch_receptions   443           4          15.0
+ WR            touches   443           4          15.0
+ DL        tackles_sck   492           3           1.0
+ LB             qb_hit   406           3           1.0
+ WR             rz_g2g   443           3           3.0
+ DB             qb_hit   634           2           1.0
+ DL               pdef   492           2           1.0
+ DL        tackles_tfl   492           2           1.0
+stats compared: 141  stats with any mismatch: 39
+wrote reference/ideal_team_2025_standard.csv
+wrote reference/ideal_team_2025_half_ppr.csv
+wrote reference/ideal_team_2025_full_ppr.csv
