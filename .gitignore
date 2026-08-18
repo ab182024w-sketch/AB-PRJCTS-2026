@@ -112,3 +112,6 @@ temp/
 *.key
 credentials.json
 secrets.yaml
+
+# Downloaded source CSVs (Phase 0) — re-creatable with pipeline/download.py
+NFL_Fantasy_Draft_Ideal_Analysis/data/

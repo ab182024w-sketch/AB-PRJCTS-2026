@@ -1,8 +1,16 @@
 # NFL Fantasy Draft — Ideal Team Analysis
 
-Scope definition for the Snowflake-based fantasy football optimizer. **No code exists yet — this document defines what will be built, in what order, and what decisions still need to be made.**
+Scope definition for the Snowflake-based fantasy football optimizer. Phase 0 and Phase 1 are now built — see **§12 Implementation status**, which also records the three places the real data contradicted this spec.
 
 Source data: [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), 2025 season (2026 once it starts).
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+python -m pipeline.download --season 2025 --weeks 1-18     # Phase 0
+python -m pipeline.validate_scoring --season 2025 --out reference/   # local scoring check
+```
 
 ---
 
@@ -309,6 +317,7 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 
 **Phase 1 — Warehouse and rankings (this project's core)**
 1. `sql/00_setup.sql` — database, schemas, warehouse, file formats, stage.
+   - `sql/05_git_repository.sql` — optional: mounts this GitHub repo as a Snowflake `GIT REPOSITORY`, so Snowsight → Projects → Workspaces browses `sql/*.sql` in the same tree as GitHub and each file opens as a worksheet. Nothing downstream depends on it; re-run `ALTER GIT REPOSITORY … FETCH` after every push, since the mount is a snapshot, not a live view.
 2. `sql/10_raw.sql` — the three RAW tables and `COPY INTO` loads, with `season`/`week` from `METADATA$FILENAME`.
 3. `sql/20_staging.sql` — typed/cleaned staging, path parsing, and the union onto the common tall shape.
 4. `sql/30_scoring.sql` — `SCORING_RULES` seeded with all three modes, plus `FCT_PLAYER_SCORING`.
@@ -535,3 +544,58 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 
 1. **Which offensive-yards definition counts as "yards allowed"** — nflverse's team-week splits let you include or exclude sack yardage and return yardage, and leagues differ. Minor, but it moves defenses across tier boundaries.
 2. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
+
+---
+
+## 12. Implementation status (Phase 0 + Phase 1)
+
+| Piece | State |
+| --- | --- |
+| `pipeline/download.py` | **Built and run.** 152/152 files for 2025, 49,658 data rows; a second run rewrote nothing. See `reference/PHASE0_DOWNLOAD_2025.md` |
+| `pipeline/scoring.py` | Rule set and stat-name mapping shared by the harness; the Python mirror of `sql/30_scoring.sql` |
+| `pipeline/validate_scoring.py` | **Built and run.** Runs the same tall-shape + rules-join logic in pandas, prints all three boards, and runs the §6 assertions |
+| `sql/00…99_*.sql` | **Run end-to-end on Snowflake** for 2025: 152 files staged, 47,032 raw rows, 76,359 staging rows, 141,096 scored player-weeks, 273 `IDEAL_TEAM` rows (91 slots × 3 modes). All nine error-level checks return 0 |
+| Reference boards | `reference/ideal_team_2025_{standard,half_ppr,full_ppr}.csv`, produced by the harness; all 273 Snowflake `IDEAL_TEAM` rows match them exactly. Run log: `reference/PHASE1_SNOWFLAKE_RUN.md` |
+| `sql/05_git_repository.sql` | **Run.** `FANTASY.REPO.AB_PRJCTS_2026` mounts the GitHub repo in Snowsight; `sql/` is only visible on `main` once PR #8 merges, so until then use the feature branch path |
+| Phases 1.5, 1.6, 2, 3, 4 | Not started |
+
+The harness is a verification tool, not a second pipeline: it exists so the scoring rules and the
+reconciliations could be checked before the SQL ever runs. Scoring truth stays in `SCORING_RULES`.
+
+### What the real data contradicted
+
+1. **§6's "must match the source's own pre-aggregated season file stat-for-stat" is not achievable.**
+   The source's `{POS}_season.csv` is not an exact sum of its own weekly files: 39 of 141 position/stat
+   pairs differ, by 1–26 for a handful of players each, concentrated in `TacklesAst`, `TacklesTot`,
+   `Targets`, `Touches` and the red-zone counters — none of which are scored. Three scoring inputs are
+   affected too, but barely: `DL.TacklesSck` (3 players, ≤1.0), `TE.ReceivingRec` (1 player, 1) and
+   `TE.ReceivingYDS` (1 player, 4). The check is therefore implemented as a tolerance-based **warn**, not
+   an equality error.
+2. **The source leaves `TotalPoints = 0` for an entire week while publishing that week's stats.**
+   All of 2025 week 18 is like this (`Rank` is populated, `TotalPoints` is not). Any reconciliation against
+   `TotalPoints` must exclude weeks whose `TotalPoints` sum to zero, or it fails on source data rather than
+   on ours.
+3. **`PlayerOpponent = 'Bye'` does not only mean a bye week.** Every one of the 10,598 `Team = 'FA'` rows
+   carries `Bye`, which is why bye rows are 27% of the file rather than the ~6% a real bye schedule implies.
+   Excluding bye rows from `games_played` (§3) still does the right thing, but the flag should be read as
+   "did not play", not "team was on bye".
+
+Two smaller notes: the 2025 team abbreviations are already clean (32 codes + `FA`, no `JAC`/`WSH`/`LA`
+variants), so §5's normalization table is currently an identity map kept for the Phase 1.6 nflverse join;
+and `season`/`week` regex parsing, uniqueness, `Pos` validity, position coverage and the zero-cast-failure
+assertion all pass on 2025.
+
+### Characterizing the source's own scoring
+
+Least-squares fitting the source's `TotalPoints` against the raw stat columns (weeks 1–17, offensive
+positions, R² = 0.993) recovers essentially the rule set in §4 — 0.040/passing yard, 4.00/passing TD,
+−1.94/interception, 0.10/rushing and receiving yard, 5.97–6.00/TD, 1.98/two-point, −1.71/fumble — with a
+reception coefficient of 0.54. **The source is scoring half-PPR.** Under `half_ppr`, our computed points match
+`TotalPoints` exactly for 95.5% of WR, 93.4% of TE, 92.2% of RB and 95.1% of QB player-weeks.
+
+The residual is one-directional and quantized: of the 1,023 offensive player-weeks (5.8% of 17,539) that
+disagree, the source is higher in 997, and 96% of the gaps are exact multiples of 0.1 — 1.5 and 0.6 alone
+are two thirds of them. Its points therefore imply more yardage than the stat columns it ships carry — consistent with either an unpublished yardage category or a `TotalPoints` snapshot taken
+at a different time from the stat snapshot. Kickers match 87% of the time, with the mismatches consistent
+with a different field-goal distance schedule. Defensive rows diverge by design (mean −2 pts/week): the
+source scores tackles, §4 deliberately does not.
