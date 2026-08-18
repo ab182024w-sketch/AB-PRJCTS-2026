@@ -317,6 +317,7 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 
 **Phase 1 — Warehouse and rankings (this project's core)**
 1. `sql/00_setup.sql` — database, schemas, warehouse, file formats, stage.
+   - `sql/05_git_repository.sql` — optional: mounts this GitHub repo as a Snowflake `GIT REPOSITORY`, so Snowsight → Projects → Workspaces browses `sql/*.sql` in the same tree as GitHub and each file opens as a worksheet. Nothing downstream depends on it; re-run `ALTER GIT REPOSITORY … FETCH` after every push, since the mount is a snapshot, not a live view.
 2. `sql/10_raw.sql` — the three RAW tables and `COPY INTO` loads, with `season`/`week` from `METADATA$FILENAME`.
 3. `sql/20_staging.sql` — typed/cleaned staging, path parsing, and the union onto the common tall shape.
 4. `sql/30_scoring.sql` — `SCORING_RULES` seeded with all three modes, plus `FCT_PLAYER_SCORING`.
@@ -555,6 +556,7 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | `pipeline/validate_scoring.py` | **Built and run.** Runs the same tall-shape + rules-join logic in pandas, prints all three boards, and runs the §6 assertions |
 | `sql/00…99_*.sql` | **Run end-to-end on Snowflake** for 2025: 152 files staged, 47,032 raw rows, 76,359 staging rows, 141,096 scored player-weeks, 273 `IDEAL_TEAM` rows (91 slots × 3 modes). All nine error-level checks return 0 |
 | Reference boards | `reference/ideal_team_2025_{standard,half_ppr,full_ppr}.csv`, produced by the harness; all 273 Snowflake `IDEAL_TEAM` rows match them exactly. Run log: `reference/PHASE1_SNOWFLAKE_RUN.md` |
+| `sql/05_git_repository.sql` | **Run.** `FANTASY.REPO.AB_PRJCTS_2026` mounts the GitHub repo in Snowsight; `sql/` is only visible on `main` once PR #8 merges, so until then use the feature branch path |
 | Phases 1.5, 1.6, 2, 3, 4 | Not started |
 
 The harness is a verification tool, not a second pipeline: it exists so the scoring rules and the
