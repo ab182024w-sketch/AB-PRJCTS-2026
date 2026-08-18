@@ -2,147 +2,251 @@
 
 Scope definition for the Snowflake-based fantasy football optimizer. **No code exists yet — this document defines what will be built, in what order, and what decisions still need to be made.**
 
+Source data: [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), 2025 season (2026 once it starts).
+
 ---
 
 ## 1. Goal
 
-Given season-long CSV exports of NFL player statistics (one file per position group), load them into Snowflake, compute fantasy points from the raw stat lines, and return the **ideal fantasy team**:
+Load per-week NFL player statistics into Snowflake, compute fantasy points from the raw stat lines under all three PPR modes, and return the **ideal fantasy team**:
 
 | Slot | Count | Notes |
 | --- | --- | --- |
-| QB | 10 | Ranked by total fantasy points |
-| RB | 10 | Ranked by total fantasy points |
-| WR | 10 | Ranked by total fantasy points |
-| TE | 10 | Ranked by total fantasy points |
-| K | 1 | **Deferred to v1.5** — the current CSVs carry no kicking stats (see §2) |
-| DEF | 5 | Team defenses, built by aggregating individual `LB` + `DB` + `DL` players up to their `Team` |
+| QB | 10 | Ranked by season fantasy points |
+| RB | 10 | Ranked by season fantasy points |
+| WR | 10 | Ranked by season fantasy points |
+| TE | 10 | Ranked by season fantasy points |
+| K | 1 | Single highest-scoring kicker, from `K.csv` field-goal/PAT stats |
+| DEF | 5 | **Team** defenses — `DB` + `LB` + `DL` players aggregated up to their `Team` (confirmed: team level, not individual defenders) |
 
-The output is a ranked "ideal team" board — the players who *actually* produced the most, which doubles as a draft-value reference and a season-in-review.
+The output is a ranked "ideal team" board — the players who *actually* produced the most, which doubles as a draft-value reference and a season-in-review. The board is produced three times, once per scoring mode (§4).
 
 ---
 
 ## 2. Source Data
 
-Raw inputs are CSV files, one per position group, all sharing the same header:
+### Origin
+
+**[hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data)** (MIT licensed), directory `NFL-data-Players/`. Seasons **2015 through 2025** are present; **2025 is the working season**, and the pipeline re-points at 2026 once that season starts.
+
+Path convention — note that **the week is encoded in the directory name, not in a column**:
 
 ```
-PlayerName  PlayerId  Pos  Team  PlayerOpponent
-PassingYDS  PassingTD  PassingInt
-RushingYDS  RushingTD
-ReceivingRec  ReceivingYDS  ReceivingTD
-RetTD  FumTD  2PT  Fum
+NFL-data-Players/{season}/{week}/{POS}.csv            # per-week actuals      e.g. 2025/18/QB.csv
+NFL-data-Players/{season}/{week}/projected/{POS}_projected.csv
+NFL-data-Players/{season}/{POS}_season.csv            # pre-aggregated season totals
+```
+
+`{POS}` ∈ `QB`, `RB`, `WR`, `TE`, `K`, `DB`, `LB`, `DL`. Each file is also published as `.json`; the CSVs are the input.
+
+Ingestion loads `{season}/{week}/{POS}.csv` for all weeks and derives `season` and `week` from the path (Snowflake `METADATA$FILENAME` is parsed for both). `{POS}_season.csv` is **not** the input — it is used only as an independent reconciliation target (§6).
+
+### Three distinct schemas
+
+The earlier assumption that all files share one header is wrong. There are three:
+
+**A. Offensive — `QB`, `RB`, `WR`, `TE`**
+
+```
+PlayerName, PlayerId, Pos, Team, PlayerOpponent,
+PassingYDS, PassingTD, PassingInt,
+RushingYDS, RushingTD,
+ReceivingRec, ReceivingYDS, ReceivingTD,
+RetTD, FumTD, 2PT, Fum,
+FanPtsAgainst-pts,
+TouchCarries, TouchReceptions, Touches,
+TargetsReceptions, Targets, ReceptionPercentage,
+RzTarget, RzTouch, RzG2G,
+Rank, TotalPoints
+```
+
+**B. Kicker — `K`**
+
+```
+PlayerName, PlayerId, Pos, Team, PlayerOpponent,
+PatMade, PatMissed,
+FgMade_0-19, FgMade_20-29, FgMade_30-39, FgMade_40-49, FgMade_50,
+FgMiss_0-19, FgMiss_20-29, FgMiss_30-39,
+Rank, TotalPoints
+```
+
+**C. Defensive (IDP) — `DB`, `LB`, `DL`**
+
+```
+PlayerName, PlayerId, Pos, Team, PlayerOpponent,
+TacklesTot, TacklesAst, TacklesSck, TacklesTfl,
+TurnoverInt, TurnoverFrcFum, TurnoverFumRec,
+ScoreIntTd, ScoreFumTd, ScoreBlkTd, ScoreSaf, ScoreDef2ptRet,
+Blk, PDef, QBHit,
+ReturnIntYds, ReturnFumYds,
+Rank, TotalPoints
 ```
 
 ### Column semantics
 
-| Column | Type | Meaning |
-| --- | --- | --- |
-| `PlayerName` | STRING | Display name; **not** unique — do not use as a key |
-| `PlayerId` | STRING | Stable per-player identifier; the natural key |
-| `Pos` | STRING | `QB`, `RB`, `WR`, `TE`, `K`, `LB`, `DB`, `DL` |
-| `Team` | STRING | Player's NFL team abbreviation |
-| `PlayerOpponent` | STRING | Opponent for the row — see the grain question in §3 |
-| `PassingYDS/TD/Int` | NUMBER | Passing production and interceptions thrown |
-| `RushingYDS/TD` | NUMBER | Rushing production |
-| `ReceivingRec/YDS/TD` | NUMBER | Receptions, receiving yards, receiving TDs |
-| `RetTD` | NUMBER | Return touchdowns (kick/punt) |
-| `FumTD` | NUMBER | Touchdowns scored on a fumble recovery |
-| `2PT` | NUMBER | Two-point conversions |
-| `Fum` | NUMBER | Fumbles lost |
+| Column | Meaning |
+| --- | --- |
+| `PlayerName` | Display name; **not** unique — do not use as a key |
+| `PlayerId` | Stable per-player identifier (an NFL/GSIS-style id); the natural key |
+| `Pos` | One of the eight position codes above |
+| `Team` | NFL team abbreviation; `FA` appears for unsigned players |
+| `PlayerOpponent` | Opponent for that week, `@XXX` when away, **`Bye` on bye weeks** |
+| `PassingInt` | Interceptions *thrown* (a negative for the passer) — distinct from `TurnoverInt`, which is interceptions *caught* by a defender |
+| `TacklesSck` | Sacks (fractional values are expected — half-sacks) |
+| `TacklesTfl` | Tackles for loss |
+| `PDef` / `QBHit` | Passes defensed / QB hits |
+| `FanPtsAgainst-pts` | Fantasy points the opponent's defense has allowed to this position — a matchup-difficulty indicator, **not** the player's own production |
+| `Touches`, `Targets`, `ReceptionPercentage` | Usage/opportunity volume |
+| `RzTarget`, `RzTouch`, `RzG2G` | Red-zone and goal-to-go opportunity |
+| `Rank`, `TotalPoints` | **The source's own fantasy scoring and ranking** — see below |
 
-### Known data gaps and the v1 decision
+### Notes that change the design
 
-Separate kicker and defense files exist but are not in scope yet. **v1 ranks strictly on the columns above**; the richer files land in v1.5 (§7).
-
-1. **No kicking columns.** There is no `FGM`, `FGA`, `XPM`, or field-goal distance bucket in the header. **v1 therefore omits the K slot entirely** rather than fabricating a kicker ranking from unrelated stats. v1.5 adds a kicker CSV (`FGM_0_39 / FGM_40_49 / FGM_50+ / XPM / FGMiss`) and restores the single-kicker slot.
-2. **No team-defense columns.** Sacks, interceptions caught, fumbles recovered, safeties, and points allowed are not present. **v1 ranks defenses only on what is available** — `RetTD`, `FumTD`, and any offensive-style production recorded for `LB`/`DB`/`DL` players — rolled up by `Team`. This is a weak proxy and the resulting top 5 should be treated as provisional; v1.5 replaces it with a real defensive CSV (`Sack / Int / FR / Safety / PtsAllowed / YdsAllowed`).
-3. **`PassingInt` is interceptions thrown** (a negative for the passer). Interceptions *caught* by a defender are a different, absent stat.
-
-The scoring-rules table (§4) and the slot configuration are data, not hard-coded SQL, specifically so that v1.5 adds rows and files rather than rewriting the pipeline.
+1. **Kicker and defensive stats are fully available.** The previously deferred Phase 1.5 is therefore folded into Phase 1: the K slot ships in v1, and team defenses are built from real defensive events (sacks, interceptions, forced/recovered fumbles, safeties, defensive TDs) rather than a `RetTD`/`FumTD` proxy.
+2. **Team defense is assembled from IDP stats, not a DST feed.** Summing `DB`+`LB`+`DL` to the team gives every standard DST *event* category, but **points allowed and yards allowed are absent** — those are team-game outcomes, not player stats. Most real DST scoring is dominated by the points-allowed tier, so this ranking measures *defensive playmaking* and will differ from a league's DST ranking. This is a genuine modeling limitation, stated up front. Points-allowed tiers can be added later from a team-level game-results source.
+3. **`TotalPoints` is the source's scoring, not ours.** Its rule set is unknown and its PPR mode unstated, so it is **not** used for ranking. It is loaded anyway and used as a reconciliation signal: our computed points under one of the three modes should track it closely, and a large systematic divergence means a scoring bug or a misunderstood column.
+4. **Empty strings mean zero, not missing.** The CSVs leave unused stat cells blank (a QB's `ReceivingYDS`, a bye-week row's everything). These are legitimately zero for scoring, but they must be distinguished from a *parse failure* — see §5.
+5. **Bye weeks appear as rows** with `PlayerOpponent = 'Bye'` and no stats. They must be excluded from `games_played` or every per-game average is silently deflated.
+6. **Projections exist** (`projected/{POS}_projected.csv`, with `PlayerWeekProjectedPts`, `ProjectedRank`, and `ProjectionDiff`). Out of scope for v1 — this project ranks actual production — but they are the natural input for a later "who outperformed their projection" view.
+7. **Ten prior seasons (2015–2024) are available** in the identical layout. v1 targets one season; multi-season is a later addition that costs a `season` predicate rather than a redesign, which is why `season` is carried as a column from ingestion onward.
 
 ---
 
 ## 3. Grain
 
-**Confirmed: one row per player per game.** `PlayerId` alone is therefore *not* unique in the source — the grain is `(PlayerId, game)`, with `PlayerOpponent` identifying the game.
+**One row per player per week.** `PlayerId` alone is not unique; the true grain is **`(season, week, PlayerId)`**, where `season` and `week` come from the file path (§2) rather than from a column.
 
 Consequences that shape the whole pipeline:
 
-- **Season totals are a `GROUP BY PlayerId` aggregation**, not a direct read. `FCT_PLAYER_SCORING` scores each row at game grain; a separate `AGG_PLAYER_SEASON` sums to the season level, and the ideal-team ranking reads from the season aggregate.
+- **Season totals are an aggregation, not a direct read.** `FCT_PLAYER_SCORING` scores each row at week grain; `AGG_PLAYER_SEASON` groups to `(season, PlayerId, scoring_mode)`, and the ideal-team ranking reads from that aggregate. The source's own `{POS}_season.csv` is used to *verify* this roll-up, never to replace it (§6).
 - **Per-game and consistency metrics come for free** and are worth computing, since the whole point of an "ideal team" board is separating volume from reliability:
-  - `games_played` — count of rows per player
+  - `games_played` — count of non-bye rows per player
   - `pts_per_game` — `total_pts / games_played`
   - `stddev_pts` and coefficient of variation — boom/bust measure
   - `floor` / `ceiling` — e.g. 20th and 80th percentile game via `PERCENTILE_CONT`
   - `weeks_above_threshold` — count of startable games (position-specific cutoff)
-  - `best_game` / `worst_game`
+  - `best_week` / `worst_week`
+  - `last_4_pts_per_game` — late-season form, now possible because weeks are ordered
 - **Ranking is on season `total_pts`** (the stated requirement), with `pts_per_game` shown alongside so a high-scoring player who simply played more games is distinguishable from a genuinely better one. A minimum-games filter is a parameter, defaulting to no filter for the headline board.
 
-### Grain follow-ups
+### Grain resolutions
 
-- **No `Week` column is present in the header.** Games can be counted and aggregated, but they cannot be *ordered*, so trend, streak, and last-N-weeks analysis is unavailable until a `Week` or date column is added to the export. Adding one is cheap and unlocks the Phase 2 per-game trend chart.
-- **Duplicate `(PlayerId, PlayerOpponent)` pairs are expected** for division opponents played twice. Without a `Week`, those two games are indistinguishable — so deduplication must *not* key on `(PlayerId, PlayerOpponent)` or it will silently delete real games. See §5.
-- **Bye weeks and DNPs:** presence of zero-stat rows vs. missing rows decides whether `games_played` means games active or games on roster. To be verified against the loaded row counts.
+- **Week ordering is available after all.** Because `week` is parsed from the directory name, games *can* be ordered — so trend, streak, last-N-weeks, and week-by-week charting are all in scope, and the Phase 2 per-game chart has a real x-axis. This was previously listed as a blocker; the directory layout resolves it.
+- **Deduplication keys on `(season, week, PlayerId)`.** With a real week, the earlier hazard (a division rival appearing twice, indistinguishable without a week) disappears. Exact duplicates within that key indicate a double load and are dropped, keeping the last-loaded row.
+- **Bye rows are excluded from `games_played`.** They exist in the data as `PlayerOpponent = 'Bye'` with no stats. Counting them would deflate every per-game average. Zero-stat rows for players who were active but did not produce *are* counted — that is a real zero.
+- **`Team = 'FA'` rows** (unsigned players) carry no meaningful team attribution and are excluded from the team-defense roll-up.
 
 ---
 
 ## 4. Scoring Rules
 
-Default scoring, configurable via a scoring-rules table rather than hard-coded in SQL:
+**All three PPR modes are canonical.** Standard (0 PPR), half-PPR (0.5), and full PPR (1.0) are each first-class outputs — not one default with variants. Every mart carries `scoring_mode` as a column, so the ideal-team board exists three times over and the three can be diffed directly (the RB/WR/TE ordering is where they diverge; QB and K are essentially unaffected).
 
-| Event | Points |
-| --- | --- |
-| Passing yard | 0.04 (1 per 25) |
-| Passing TD | 4 |
-| Interception thrown | −2 |
-| Rushing yard | 0.1 (1 per 10) |
-| Rushing TD | 6 |
-| Reception | 1.0 (full PPR) — set to 0.5 for half-PPR, 0 for standard |
-| Receiving yard | 0.1 |
-| Receiving TD | 6 |
-| Return TD | 6 |
-| Fumble-recovery TD | 6 |
-| Two-point conversion | 2 |
-| Fumble lost | −2 |
+Scoring lives in a `SCORING_RULES` table keyed by `(scoring_mode, stat_column, points_per_unit)`, joined to the fact table — not hard-coded in SQL. Adding a league's custom rules is then an `INSERT`, and the three modes are three sets of rows rather than three queries.
 
-PPR mode is a parameter, not a rewrite: results will be produced for standard / half / full PPR so the rankings can be compared.
+### Offensive
 
----
+| Event | Column | Standard | Half | Full |
+| --- | --- | --- | --- | --- |
+| Passing yard | `PassingYDS` | 0.04 | 0.04 | 0.04 |
+| Passing TD | `PassingTD` | 4 | 4 | 4 |
+| Interception thrown | `PassingInt` | −2 | −2 | −2 |
+| Rushing yard | `RushingYDS` | 0.1 | 0.1 | 0.1 |
+| Rushing TD | `RushingTD` | 6 | 6 | 6 |
+| **Reception** | `ReceivingRec` | **0** | **0.5** | **1.0** |
+| Receiving yard | `ReceivingYDS` | 0.1 | 0.1 | 0.1 |
+| Receiving TD | `ReceivingTD` | 6 | 6 | 6 |
+| Return TD | `RetTD` | 6 | 6 | 6 |
+| Fumble-recovery TD | `FumTD` | 6 | 6 | 6 |
+| Two-point conversion | `2PT` | 2 | 2 | 2 |
+| Fumble lost | `Fum` | −2 | −2 | −2 |
+
+### Kicker (identical across modes)
+
+| Event | Column | Points |
+| --- | --- | --- |
+| PAT made | `PatMade` | 1 |
+| PAT missed | `PatMissed` | −1 |
+| FG 0–19 | `FgMade_0-19` | 3 |
+| FG 20–29 | `FgMade_20-29` | 3 |
+| FG 30–39 | `FgMade_30-39` | 3 |
+| FG 40–49 | `FgMade_40-49` | 4 |
+| FG 50+ | `FgMade_50` | 5 |
+| FG missed | `FgMiss_*` | −1 |
+
+Distance-tiered field goals are exactly why the source's bucketed columns are useful; a flat 3-points-per-FG rule would understate long-range kickers.
+
+### Team defense (identical across modes)
+
+Computed per defensive player, then summed to the team (§5).
+
+| Event | Column | Points |
+| --- | --- | --- |
+| Sack | `TacklesSck` | 1 |
+| Interception | `TurnoverInt` | 2 |
+| Fumble recovered | `TurnoverFumRec` | 2 |
+| Forced fumble | `TurnoverFrcFum` | 1 |
+| Safety | `ScoreSaf` | 2 |
+| Defensive TD | `ScoreIntTd` + `ScoreFumTd` + `ScoreBlkTd` | 6 |
+| Blocked kick | `Blk` | 2 |
+| Defensive 2pt return | `ScoreDef2ptRet` | 2 |
+
+**Points allowed and yards allowed are not in the source** (§2), so their tier bonuses — usually the largest single component of real DST scoring — are absent. They are recoverable from a second feed; see §5a for the confirmed plan. Tackles, TFL, passes defensed, and QB hits are deliberately **excluded** from team-defense scoring: they are IDP-league categories, and including them would make the ranking a measure of tackle volume (i.e. of a defense being on the field a lot, which correlates with being *bad*) rather than of defensive playmaking. They remain available in the fact table for a possible future IDP mode.
+
+### Points-allowed / yards-allowed tiers (Phase 1.6 — §5a)
+
+Once the team-results feed lands, these two tiers are added to the DEF score. Standard values:
+
+| Points allowed | Points | | Yards allowed | Points |
+| --- | --- | --- | --- | --- |
+| 0 | 10 | | under 100 | 5 |
+| 1–6 | 7 | | 100–199 | 3 |
+| 7–13 | 4 | | 200–299 | 2 |
+| 14–20 | 1 | | 300–349 | 0 |
+| 21–27 | 0 | | 350–399 | -1 |
+| 28–34 | -1 | | 400–449 | -3 |
+| 35+ | -4 | | 450+ | -5 |
+
+Both are **per week**, then summed — a tier bonus averaged over a season would be meaningless. They are added as ordinary rows in `SCORING_RULES` keyed on a bucketed stat name, so nothing downstream changes.
 
 ## 5. Snowflake Architecture
 
 A layered warehouse, staged so each step is independently re-runnable.
 
 ```
-CSV files
-  → Snowflake internal stage  (@FANTASY_STAGE)
-  → RAW.PLAYER_STATS_RAW      (all columns as VARCHAR, plus file/row lineage)
-  → STAGING.STG_PLAYER_STATS  (typed, cleaned, deduped)
-  → MARTS.FCT_PLAYER_SCORING  (fantasy points per player per GAME)
-  → MARTS.AGG_PLAYER_SEASON   (season totals + per-game/consistency metrics)
-  → MARTS.DIM_TEAM_DEFENSE    (LB+DB+DL rolled up to Team, season level)
-  → MARTS.IDEAL_TEAM          (final ranked roster)
+hvpkod/NFL-Data CSVs  (season/week/POS.csv)
+  → Snowflake internal stage       (@FANTASY_STAGE, mirroring the season/week paths)
+  → RAW.OFFENSE_RAW | K_RAW | DEFENSE_RAW   (3 schemas §2; VARCHAR + file/row lineage)
+  → STAGING.STG_PLAYER_WEEK        (typed, cleaned, season/week parsed from path, unioned)
+  → MARTS.FCT_PLAYER_SCORING       (points per player per week per scoring_mode)
+  → MARTS.AGG_PLAYER_SEASON        (season totals + per-game/consistency metrics)
+  → MARTS.FCT_TEAM_DEFENSE         (DB+LB+DL rolled up to Team, per week then season)
+  → MARTS.IDEAL_TEAM               (final ranked roster, one board per scoring_mode)
 ```
+
+Three RAW tables rather than one, because the three source schemas share only their five key columns. `STG_PLAYER_WEEK` is the union that reconciles them onto a common `(season, week, PlayerId, Pos, Team, opponent, stat, value)` shape — a **tall/EAV layout**, which is what allows `SCORING_RULES` to be a simple join on `stat` instead of a wide expression repeated three times per mode.
 
 ### Layer responsibilities
 
 **Stage / RAW**
-- Named file format: CSV, header skipped, `FIELD_OPTIONALLY_ENCLOSED_BY='"'`, `NULL_IF=('','NA','-')`.
-- Everything lands as `VARCHAR`; `METADATA$FILENAME` and `METADATA$FILE_ROW_NUMBER` are retained so any bad value can be traced back to a line in a file.
+- Named file format: CSV, header skipped, `FIELD_OPTIONALLY_ENCLOSED_BY='"'`, `EMPTY_FIELD_AS_NULL = TRUE`.
+- Everything lands as `VARCHAR`; `METADATA$FILENAME` and `METADATA$FILE_ROW_NUMBER` are retained — the filename is not just lineage here, it is **the source of `season` and `week`** (§2).
 - Load with `COPY INTO ... ON_ERROR = CONTINUE`, then review the rejected rows rather than silently discarding them.
+- Column names containing hyphens (`FgMade_0-19`, `FanPtsAgainst-pts`) and leading digits (`2PT`) require quoted identifiers; they are renamed to snake_case at the staging boundary so downstream SQL never needs quoting.
 
 **STAGING**
-- Cast numerics with `TRY_TO_NUMBER`; a failed cast surfaces as `NULL` and is counted, not hidden.
-- `COALESCE(stat, 0)` only *after* the cast-failure count is checked — otherwise a parse bug looks like a zero-production week.
-- Normalize team abbreviations (e.g. `JAC`/`JAX`, `LA`/`LAR`, `WSH`/`WAS`) via a mapping table.
-- Trim/upper-case `Pos`; assert it is in the known set.
-- **Deduplicate on the full row hash, not on `(PlayerId, PlayerOpponent)`.** Rows are per-game and a team plays each division opponent twice, so keying on the opponent would delete legitimate games. With no `Week` column (§3), only an exact-duplicate-row collapse is safe — and even that is risky if a player posts an identical stat line twice, so duplicates are *reported for review* rather than dropped automatically.
+- Parse `season` and `week` from `METADATA$FILENAME` with a regex, and assert both are non-null — an unparsed path would silently collapse the grain.
+- Cast numerics with `TRY_TO_NUMBER`; a failed cast surfaces as `NULL` and is **counted**. Because blank cells legitimately mean zero (§2), the count is the only thing separating "no production" from "parse bug": `COALESCE(stat, 0)` is applied only after that count is asserted to be zero.
+- Normalize team abbreviations (e.g. `JAC`/`JAX`, `LA`/`LAR`, `WSH`/`WAS`) via a mapping table; strip the leading `@` from `PlayerOpponent` into a separate `is_away` flag.
+- Trim/upper-case `Pos`; assert it is in the known eight.
+- Flag `PlayerOpponent = 'Bye'` rows as `is_bye` rather than deleting them — they are evidence the week loaded correctly.
+- Deduplicate on `(season, week, PlayerId)`, keeping the last loaded row.
 
 **MARTS**
-- `FCT_PLAYER_SCORING`: **one row per player per game**, with each scoring component broken out (`pass_pts`, `rush_pts`, `rec_pts`, `misc_pts`) alongside `total_pts`, so a surprising ranking can be explained rather than merely trusted.
-- `AGG_PLAYER_SEASON`: `GROUP BY PlayerId` over the fact table — season `total_pts`, `games_played`, `pts_per_game`, `stddev_pts`, floor/ceiling percentiles, and `weeks_above_threshold` (§3). This is what the ideal-team ranking reads from.
-- `DIM_TEAM_DEFENSE`: `SUM` of `LB` + `DB` + `DL` production grouped by `Team`; this is what "joining LB, DB, DL" means in practice, and the top 5 teams by that total are the defense picks. In v1 the only meaningful inputs are `RetTD` and `FumTD` (§2), so the roll-up is deliberately thin and swaps in real defensive stats at v1.5 without changing its interface.
-- `IDEAL_TEAM`: `QUALIFY ROW_NUMBER() OVER (PARTITION BY slot ORDER BY season_total_pts DESC) <= n` per slot, unioned into a single roster board, carrying `games_played` and `pts_per_game` as context columns.
+- `FCT_PLAYER_SCORING`: **one row per `(season, week, PlayerId, scoring_mode)`**, with each component broken out (`pass_pts`, `rush_pts`, `rec_pts`, `kick_pts`, `def_pts`, `misc_pts`) alongside `total_pts`, so a surprising ranking can be explained rather than merely trusted. The source's own `TotalPoints` is carried alongside for reconciliation (§6).
+- `AGG_PLAYER_SEASON`: `GROUP BY (season, PlayerId, scoring_mode)` — season `total_pts`, `games_played` (bye rows excluded), `pts_per_game`, `stddev_pts`, floor/ceiling percentiles, and `weeks_above_threshold` (§3). This is what the ideal-team ranking reads from.
+- `FCT_TEAM_DEFENSE`: `SUM` of `DB` + `LB` + `DL` defensive scoring grouped by `(season, week, Team)`, then rolled to the season. This is what "joining LB, DB, DL" means in practice, and the top 5 teams are the defense picks. Excludes `Team = 'FA'`. See §4 for why tackle volume is deliberately not scored.
+- `IDEAL_TEAM`: `QUALIFY ROW_NUMBER() OVER (PARTITION BY scoring_mode, slot ORDER BY season_total_pts DESC) <= n` per slot, unioned into a single roster board, carrying `games_played` and `pts_per_game` as context columns.
 
 ### Warehouse / cost notes
 - An `XSMALL` warehouse with auto-suspend at 60s is more than sufficient for a single season of player-week rows.
@@ -150,48 +254,93 @@ CSV files
 
 ---
 
+## 5a. Team Results Feed (Phase 1.6)
+
+hvpkod is a player-stat source and has no team or DST file — verified: `NFL-data-Players/2025/18/` contains only `QB/RB/WR/TE/K/DB/LB/DL`. Points allowed and yards allowed therefore need a second source. **[nflverse-data](https://github.com/nflverse/nflverse-data) covers both**, is free, versioned, and needs no scraping or API key.
+
+| Need | Asset | Notes |
+| --- | --- | --- |
+| Points allowed | `schedules/games.csv` | One row per game with `season, week, home_team, away_team, home_score, away_score`. Points allowed = the opponent's score. 2025 verified present. |
+| Yards allowed | `stats_team/stats_team_week_{season}.csv` | One row per team per week with `opponent_team` and full offensive splits (`passing_yards`, `rushing_yards`, …). Yards allowed for team X in week W = the *opponent's* offensive yards in that row. |
+
+Both are stable release-asset URLs of the form `https://github.com/nflverse/nflverse-data/releases/download/{tag}/{file}`, so Phase 0's downloader handles them with no new machinery. Parquet is also published if CSV parsing becomes the bottleneck.
+
+**Integration:**
+
+```
+nflverse games.csv + stats_team_week.csv
+  → RAW.TEAM_GAME_RAW
+  → STAGING.STG_TEAM_WEEK        (season, week, team, opponent, points_allowed, yards_allowed)
+  → joins FCT_TEAM_DEFENSE on (season, week, team)
+```
+
+The join key is `(season, week, team)`, which the existing team-defense fact already has — so this is an added left join plus two `SCORING_RULES` rows, not a re-model.
+
+**The one real gotcha:** abbreviations nearly match but not exactly. Checked against 2025 week 18: the only conflict is the Rams — hvpkod uses `LAR`, nflverse uses `LA`. hvpkod additionally has `FA` (free agents), which has no team-results counterpart and is already excluded from defensive rollups (§3). The existing normalization mapping table (§5) absorbs both; the join must be asserted to produce exactly 32 teams per week so a silent abbreviation drift never quietly zeroes out a defense's tier bonus.
+
+**Also unlocked by the same feed**, at no extra ingestion cost: home/away splits, opponent strength (`FanPtsAgainst-pts` is already in the offensive files but is unvalidated), rest days, and separating playoff weeks from the regular season.
+
+---
+
 ## 6. Data Quality Checks
 
 Run as assertions after each load; a failure blocks promotion to MARTS.
 
-- `PlayerId` is never null; `(PlayerId, PlayerOpponent)` appears at most twice (home/away against a division rival) — three or more occurrences indicate a duplicate load.
-- `games_played` per player is between 1 and 17; anything higher means rows were double-loaded.
-- `Pos` is in the allowed set; unmapped values are reported, not dropped.
-- No negative yardage totals where impossible; flag implausible outliers (e.g. `PassingYDS > 700` in one game).
-- Row count per position group is within an expected band vs. the previous load.
-- Every `Team` and `PlayerOpponent` resolves to a known team abbreviation.
-- Total fantasy points reconcile within tolerance against a hand-checked sample of ~10 known players.
+- `season` and `week` parsed from every filename; zero unparsed rows. `week` is within 1–18.
+- `(season, week, PlayerId)` is unique.
+- `PlayerId` and `Pos` are never null; `Pos` is in the allowed eight.
+- **Every `(season, week)` combination is present** for all eight position files — a missing directory is a silently incomplete season, which would quietly under-count a player's totals.
+- `games_played` per player is between 0 and 18 once bye rows are excluded.
+- Cast-failure count is zero (§5) — the check that distinguishes blank-means-zero from a parse bug.
+- No impossible values: negative yardage where impossible, `PassingYDS > 700` in one week, sacks not a multiple of 0.5.
+- Every `Team` and `PlayerOpponent` resolves to a known abbreviation (allowing `FA` and `Bye`).
+- **Reconciliation against `{POS}_season.csv`:** summing our per-week rows to the season must match the source's own pre-aggregated season file stat-for-stat. This is a genuinely independent check on the ingestion — it catches missing weeks and double loads that internal consistency checks cannot.
+- **Reconciliation against `TotalPoints`:** our computed points should track the source's own scoring closely under at least one of the three modes. A large systematic gap means a scoring bug or a misread column (§2).
 
 ---
 
 ## 7. Deliverables
 
-**Phase 1 — Warehouse and rankings (this project's core)**
-1. `sql/00_setup.sql` — database, schemas, warehouse, file format, stage.
-2. `sql/10_raw.sql` — RAW tables and `COPY INTO` loads.
-3. `sql/20_staging.sql` — typed/cleaned staging views.
-4. `sql/30_scoring.sql` — scoring-rules table and `FCT_PLAYER_SCORING`.
-5. `sql/35_season_agg.sql` — `AGG_PLAYER_SEASON` season totals and per-game/consistency metrics.
-6. `sql/40_defense.sql` — `DIM_TEAM_DEFENSE` roll-up.
-7. `sql/50_ideal_team.sql` — the final ideal-team query.
-8. `sql/99_tests.sql` — the data-quality assertions from §6.
-9. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 5 DEF — no K in v1) exported to CSV and committed as a reference result.
+**Phase 0 — Data acquisition**
+- A small Python script that pulls `NFL-data-Players/2025/{1..18}/{POS}.csv` from the source repo (plus `{POS}_season.csv` for reconciliation) into a local `data/` tree mirroring the season/week layout, then `PUT`s them to the Snowflake stage. Re-runnable and idempotent, since the 2026 season will re-run it weekly.
 
-**Phase 1.5 — Kicker and real defensive stats**
-- Load the separate kicker CSV; add field-goal-by-distance and extra-point rows to the scoring-rules table; restore the 1-K slot.
-- Load the separate defensive CSV; rebuild `DIM_TEAM_DEFENSE` on sacks / interceptions / fumble recoveries / safeties / points allowed instead of the `RetTD`+`FumTD` proxy.
-- Re-run the reference output and diff the top 5 defenses against the v1 result to quantify how misleading the proxy was.
+**Phase 1 — Warehouse and rankings (this project's core)**
+1. `sql/00_setup.sql` — database, schemas, warehouse, file formats, stage.
+2. `sql/10_raw.sql` — the three RAW tables and `COPY INTO` loads, with `season`/`week` from `METADATA$FILENAME`.
+3. `sql/20_staging.sql` — typed/cleaned staging, path parsing, and the union onto the common tall shape.
+4. `sql/30_scoring.sql` — `SCORING_RULES` seeded with all three modes, plus `FCT_PLAYER_SCORING`.
+5. `sql/35_season_agg.sql` — `AGG_PLAYER_SEASON` season totals and per-game/consistency metrics.
+6. `sql/40_defense.sql` — `FCT_TEAM_DEFENSE` roll-up.
+7. `sql/50_ideal_team.sql` — the final ideal-team query.
+8. `sql/99_tests.sql` — the data-quality assertions from §6, including both reconciliations.
+9. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 1 K / 5 DEF) exported to CSV **once per scoring mode** and committed as a reference result.
+
+**Phase 1.5 — Season refresh for 2026**
+- The 2025 files are complete and static; the 2026 season re-runs Phase 0 weekly against `NFL-data-Players/2026/{week}/`.
+- `season` is already a column throughout, so this is a parameter change plus a scheduled job — not a rebuild. Multi-season comparison (2015–2024 are available in the identical layout) becomes a `WHERE season IN (...)` at that point.
+
+**Phase 1.6 — Team results feed (§5a)**
+- `sql/15_team_results.sql` + a Phase 0 downloader addition for the two nflverse assets, then `STG_TEAM_WEEK` and two extra `SCORING_RULES` rows for the points-allowed and yards-allowed tiers.
+- Deliberately sequenced *after* Phase 1 rather than inside it: the DEF board is usable without it, and keeping the second source separate means a broken upstream release never blocks the core rankings.
 
 **Phase 2 — Front end (future)** — stack recommendation in §8
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
-- Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/misc`) and per-game chart; a team-defense comparison view.
-- Interactive scoring: PPR toggle and editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules.
-- Design intent: dark-mode-first, position-color-coded, responsive, fast — the table is the product, so sorting and filtering must feel instant.
+- Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/kick/def`) and a **week-by-week chart**; a team-defense comparison view.
+- Interactive scoring: a three-way PPR mode selector and editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules.
+- Design intent: dark-mode-first, position-color-coded, fast — the table is the product, so sorting and filtering must feel instant.
+- **Mobile-readable from day one** (§8, "Mobile"). This is a hard requirement for the web app, and separate from the native apps in Phase 4.
 
 **Phase 3 — Waiver-wire tracking scraper (future)** — stack recommendation in §9
 - A scheduled Python scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
 - Outputs a "waiver targets" view: high season/per-game points, low roster percentage, favorable upcoming opponent.
 - Snapshots are stored as a time series so week-over-week roster-percentage *movement* is visible, not only the latest state.
+
+**Phase 4 — iOS / Android beta (very distant — target: end of the 2026–27 season at the earliest)**
+- Explicitly gated behind Phases 1–3 being complete and *working*. Feature-correctness on the web comes first; a native app that wraps a half-finished pipeline is two problems instead of one.
+- Interim answer: the responsive web app (§8) covers phone use. A native app is only worth building for what the web cannot do — push notifications for waiver targets, offline access to the rankings, and a home-screen presence during draft season.
+- Sequencing note: shipping the web app as an installable PWA is a cheap intermediate step that delivers a home-screen icon and offline caching without an app-store release, and is the sensible thing to try before committing to native.
+- Stack thinking, to be revisited when the phase actually starts: a single cross-platform codebase (React Native/Expo or Flutter) rather than two native ones, reading the same API the web app uses — which is a further reason the front end should talk to a documented API layer rather than embedding queries, once it outgrows Streamlit.
+- App-store review, Apple developer enrollment, and TestFlight/Play Console beta distribution are calendar overhead that has to be planned for separately from build effort.
 
 ---
 
@@ -250,6 +399,18 @@ That stack: **FastAPI** (Python, matches the rest of the project) + `snowflake-c
 ### Serving strategy
 
 Query Snowflake directly. The marts are small, and the interactive PPR toggle needs live recomputation. Caching happens at the app layer (`st.cache_data`) plus Snowflake's own result cache; an intermediate export store would add staleness for no real benefit at this data volume — with one exception for public hosting, below.
+
+### Mobile
+
+The web dashboard must be **readable and usable on a phone** from the first release — this is a Phase 2 requirement, not a Phase 4 one.
+
+What that means concretely for a table-heavy app:
+- A wide ranking table does not shrink gracefully. On narrow viewports the board switches to a **card-per-player layout** — name, position, team, points, points-per-game — rather than a horizontally-scrolling grid.
+- Column priority is explicit: rank, name, and total points always visible; usage/consistency columns hidden behind a "more detail" toggle.
+- Controls (PPR mode, position filter, min games) move from a sidebar to a collapsible top sheet, since Streamlit's sidebar is cramped on mobile.
+- Charts get a minimum touch-target size and are made scrollable rather than compressed.
+
+Streamlit is responsive enough for this with `st.columns` breakpoints and `use_container_width=True` everywhere, but it needs deliberate layout work — the default wide-table rendering is not usable on a phone. If mobile ergonomics ever become the dominant constraint, that is a legitimate trigger for the FastAPI + React path above, where the layout is fully controllable.
 
 ### Making the dashboard public
 
@@ -324,19 +485,32 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 
 - Live in-season projections or forecasting models — this ranks *actual* production.
 - Trade analyzers, auction values, and keeper/dynasty valuation.
-- Multi-season history and aging curves.
+- Multi-season history and aging curves — the data is available (2015–2024) and `season` is carried throughout, but v1 targets one season.
+- The source's `projected/` files and actual-vs-projection analysis (§2).
+- IDP scoring (tackles, TFL, passes defensed) as a ranked category; those columns are loaded but not scored (§4).
 - Head-to-head league simulation or playoff odds.
 - Any automated roster moves against a real league platform.
 
 ---
 
-## 11. Open Questions
+## 11. Decisions and Open Questions
 
-1. Can a `Week` or date column be added to the export? Rows are per-game but unordered without it, which blocks trend analysis and makes duplicate detection imprecise. (§3)
-2. Which scoring mode is canonical — standard, half-PPR, or full PPR?
-3. Which season(s) do the current files cover, and will they be refreshed in-season?
-4. Does "top 5 Defenses" mean the 5 best team defenses, or the top 5 individual defenders across `LB`/`DB`/`DL`? This document assumes team defenses.
+### Resolved
 
-**Resolved:**
-- v1 ranks only on the columns present today — no kicker slot, defenses on the `RetTD`/`FumTD` proxy. The separate kicker and defensive files are deferred to Phase 1.5. (§2, §7)
-- Rows are per-player-per-game; season totals are an explicit aggregation and per-game/consistency metrics are in scope. (§3)
+| Question | Decision |
+| --- | --- |
+| Data source | [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), `NFL-data-Players/{season}/{week}/{POS}.csv`, MIT licensed (§2) |
+| Season coverage / refresh | 2025 is the working season and is complete; the pipeline re-points at 2026 when that season starts and refreshes weekly. 2015–2024 also available (§7 Phase 1.5) |
+| Grain and week ordering | One row per player per week; `season`/`week` parsed from the file path, so weeks *are* ordered and trend analysis is in scope (§3) |
+| Canonical scoring mode | **All three.** Standard, half-PPR, and full PPR are each first-class; `scoring_mode` is a column on every mart (§4) |
+| "Top 5 Defenses" | **Team** defenses — `DB`+`LB`+`DL` aggregated to `Team`, not individual defenders (§1, §5) |
+| Kicker slot | In scope for v1; `K.csv` has PAT and distance-bucketed field goals (§2, §4) |
+| Mobile | Responsive web from the first release; native iOS/Android is a distant Phase 4 (§7, §8) |
+| Points allowed / yards allowed | **Yes, addable.** hvpkod has no team file, but nflverse-data supplies both; scheduled as Phase 1.6 (§5a) |
+
+### Still open
+
+1. **Which offensive-yards definition counts as "yards allowed"** — nflverse's team-week splits let you include or exclude sack yardage and return yardage, and leagues differ. Minor, but it moves defenses across tier boundaries.
+2. **Which scoring mode headlines the UI** when only one board can be shown at a time (all three are computed regardless).
+3. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
+4. **Playoff weeks.** Whether weeks 15–18 should be separable from the regular season for "who won championships" views.
