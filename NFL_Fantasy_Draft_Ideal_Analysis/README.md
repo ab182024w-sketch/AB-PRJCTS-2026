@@ -191,9 +191,23 @@ Computed per defensive player, then summed to the team (§5).
 | Blocked kick | `Blk` | 2 |
 | Defensive 2pt return | `ScoreDef2ptRet` | 2 |
 
-**Points allowed and yards allowed are not in the source** (§2), so their tier bonuses — usually the largest single component of real DST scoring — are absent. Tackles, TFL, passes defensed, and QB hits are deliberately **excluded** from team-defense scoring: they are IDP-league categories, and including them would make the ranking a measure of tackle volume (i.e. of a defense being on the field a lot, which correlates with being *bad*) rather than of defensive playmaking. They remain available in the fact table for a possible future IDP mode.
+**Points allowed and yards allowed are not in the source** (§2), so their tier bonuses — usually the largest single component of real DST scoring — are absent. They are recoverable from a second feed; see §5a for the confirmed plan. Tackles, TFL, passes defensed, and QB hits are deliberately **excluded** from team-defense scoring: they are IDP-league categories, and including them would make the ranking a measure of tackle volume (i.e. of a defense being on the field a lot, which correlates with being *bad*) rather than of defensive playmaking. They remain available in the fact table for a possible future IDP mode.
 
----
+### Points-allowed / yards-allowed tiers (Phase 1.6 — §5a)
+
+Once the team-results feed lands, these two tiers are added to the DEF score. Standard values:
+
+| Points allowed | Points | | Yards allowed | Points |
+| --- | --- | --- | --- | --- |
+| 0 | 10 | | under 100 | 5 |
+| 1–6 | 7 | | 100–199 | 3 |
+| 7–13 | 4 | | 200–299 | 2 |
+| 14–20 | 1 | | 300–349 | 0 |
+| 21–27 | 0 | | 350–399 | -1 |
+| 28–34 | -1 | | 400–449 | -3 |
+| 35+ | -4 | | 450+ | -5 |
+
+Both are **per week**, then summed — a tier bonus averaged over a season would be meaningless. They are added as ordinary rows in `SCORING_RULES` keyed on a bucketed stat name, so nothing downstream changes.
 
 ## 5. Snowflake Architecture
 
@@ -240,6 +254,34 @@ Three RAW tables rather than one, because the three source schemas share only th
 
 ---
 
+## 5a. Team Results Feed (Phase 1.6)
+
+hvpkod is a player-stat source and has no team or DST file — verified: `NFL-data-Players/2025/18/` contains only `QB/RB/WR/TE/K/DB/LB/DL`. Points allowed and yards allowed therefore need a second source. **[nflverse-data](https://github.com/nflverse/nflverse-data) covers both**, is free, versioned, and needs no scraping or API key.
+
+| Need | Asset | Notes |
+| --- | --- | --- |
+| Points allowed | `schedules/games.csv` | One row per game with `season, week, home_team, away_team, home_score, away_score`. Points allowed = the opponent's score. 2025 verified present. |
+| Yards allowed | `stats_team/stats_team_week_{season}.csv` | One row per team per week with `opponent_team` and full offensive splits (`passing_yards`, `rushing_yards`, …). Yards allowed for team X in week W = the *opponent's* offensive yards in that row. |
+
+Both are stable release-asset URLs of the form `https://github.com/nflverse/nflverse-data/releases/download/{tag}/{file}`, so Phase 0's downloader handles them with no new machinery. Parquet is also published if CSV parsing becomes the bottleneck.
+
+**Integration:**
+
+```
+nflverse games.csv + stats_team_week.csv
+  → RAW.TEAM_GAME_RAW
+  → STAGING.STG_TEAM_WEEK        (season, week, team, opponent, points_allowed, yards_allowed)
+  → joins FCT_TEAM_DEFENSE on (season, week, team)
+```
+
+The join key is `(season, week, team)`, which the existing team-defense fact already has — so this is an added left join plus two `SCORING_RULES` rows, not a re-model.
+
+**The one real gotcha:** abbreviations nearly match but not exactly. Checked against 2025 week 18: the only conflict is the Rams — hvpkod uses `LAR`, nflverse uses `LA`. hvpkod additionally has `FA` (free agents), which has no team-results counterpart and is already excluded from defensive rollups (§3). The existing normalization mapping table (§5) absorbs both; the join must be asserted to produce exactly 32 teams per week so a silent abbreviation drift never quietly zeroes out a defense's tier bonus.
+
+**Also unlocked by the same feed**, at no extra ingestion cost: home/away splits, opponent strength (`FanPtsAgainst-pts` is already in the offensive files but is unvalidated), rest days, and separating playoff weeks from the regular season.
+
+---
+
 ## 6. Data Quality Checks
 
 Run as assertions after each load; a failure blocks promotion to MARTS.
@@ -276,6 +318,10 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 **Phase 1.5 — Season refresh for 2026**
 - The 2025 files are complete and static; the 2026 season re-runs Phase 0 weekly against `NFL-data-Players/2026/{week}/`.
 - `season` is already a column throughout, so this is a parameter change plus a scheduled job — not a rebuild. Multi-season comparison (2015–2024 are available in the identical layout) becomes a `WHERE season IN (...)` at that point.
+
+**Phase 1.6 — Team results feed (§5a)**
+- `sql/15_team_results.sql` + a Phase 0 downloader addition for the two nflverse assets, then `STG_TEAM_WEEK` and two extra `SCORING_RULES` rows for the points-allowed and yards-allowed tiers.
+- Deliberately sequenced *after* Phase 1 rather than inside it: the DEF board is usable without it, and keeping the second source separate means a broken upstream release never blocks the core rankings.
 
 **Phase 2 — Front end (future)** — stack recommendation in §8
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
@@ -460,10 +506,11 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | "Top 5 Defenses" | **Team** defenses — `DB`+`LB`+`DL` aggregated to `Team`, not individual defenders (§1, §5) |
 | Kicker slot | In scope for v1; `K.csv` has PAT and distance-bucketed field goals (§2, §4) |
 | Mobile | Responsive web from the first release; native iOS/Android is a distant Phase 4 (§7, §8) |
+| Points allowed / yards allowed | **Yes, addable.** hvpkod has no team file, but nflverse-data supplies both; scheduled as Phase 1.6 (§5a) |
 
 ### Still open
 
-1. **Points allowed / yards allowed for team defense.** Not present in a player-stat source (§2). Adding a team-level game-results feed would make the DEF ranking match real DST scoring; without it the top 5 measures playmaking only. Worth doing, but it is a second data source — confirm before adding.
+1. **Which offensive-yards definition counts as "yards allowed"** — nflverse's team-week splits let you include or exclude sack yardage and return yardage, and leagues differ. Minor, but it moves defenses across tier boundaries.
 2. **Which scoring mode headlines the UI** when only one board can be shown at a time (all three are computed regardless).
 3. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
 4. **Playoff weeks.** Whether weeks 15–18 should be separable from the regular season for "who won championships" views.
