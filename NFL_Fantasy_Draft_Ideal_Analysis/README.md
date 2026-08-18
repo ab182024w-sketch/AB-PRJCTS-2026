@@ -239,8 +239,8 @@ Re-ranking stays in SQL (a parameterized view or stored procedure); Streamlit on
 ### Upgrade path, only if Streamlit is outgrown
 
 Move to **FastAPI + React** when one of these becomes true — not before:
-- Public/multi-user access without Snowflake logins is needed.
 - The design demands custom layout and interactions Streamlit cannot express.
+- A public dashboard needs per-user accounts, saved leagues, or rate limiting beyond what a single Streamlit process handles (going public alone does *not* require this — see "Making the dashboard public" below).
 - Sub-second interaction on large tables matters (Streamlit re-runs the script on each interaction).
 
 That stack: **FastAPI** (Python, matches the rest of the project) + `snowflake-connector-python` with a connection pool, `pydantic` response models, **React + TypeScript + Vite**, **TanStack Table** for the sortable/filterable grid, **Tailwind** + **shadcn/ui** for the dark-mode-first design, and **Recharts** for charts. Deploy the API on any container host and the front end as static files.
@@ -249,7 +249,28 @@ That stack: **FastAPI** (Python, matches the rest of the project) + `snowflake-c
 
 ### Serving strategy
 
-Query Snowflake directly. The marts are small, and the interactive PPR toggle needs live recomputation. Caching happens at the app layer (`st.cache_data`) plus Snowflake's own result cache; an intermediate export store would add staleness for no real benefit at this data volume.
+Query Snowflake directly. The marts are small, and the interactive PPR toggle needs live recomputation. Caching happens at the app layer (`st.cache_data`) plus Snowflake's own result cache; an intermediate export store would add staleness for no real benefit at this data volume — with one exception for public hosting, below.
+
+### Making the dashboard public
+
+Streamlit can absolutely serve a public, anyone-can-open dashboard — but **not** as Streamlit in Snowflake. SiS apps are gated behind Snowflake authentication and role grants, so every viewer needs a Snowflake login. Going public means running the *same app code* on a different host.
+
+| Option | Public? | Cost | Notes |
+| --- | --- | --- | --- |
+| **Streamlit in Snowflake** | No — Snowflake login required | Warehouse compute only | Best for private/personal use; recommended default (§8) |
+| **Streamlit Community Cloud** | Yes | Free | Deploys from a GitHub repo; simplest path to a public URL. Resource-limited and apps sleep when idle |
+| **Container host** (Cloud Run, Render, Fly.io) | Yes | Low, usage-based | Full control, custom domain, scale-to-zero. `streamlit run` in a container |
+
+The app code is identical across all three; only the Snowflake connection and secrets handling differ. Start on SiS, and moving public later is a deployment change, not a rewrite — which is a further reason to keep scoring logic in SQL rather than in the UI layer.
+
+**Connecting a public app to Snowflake safely.** Outside SiS there is no inherited identity, so the app authenticates as one service account shared by every visitor. That account must be:
+- **Read-only and narrowly scoped** — a dedicated role with `SELECT` on the `MARTS` views only; no access to `RAW`, `STAGING`, or any other database.
+- **Key-pair authenticated**, with the private key in the host's secret store (`st.secrets`, or the platform's secret manager) — never in the repo. Note that Streamlit Community Cloud requires a public GitHub repo, so secret hygiene is not optional there.
+- **Backed by a dedicated `XSMALL` warehouse** with `AUTO_SUSPEND = 60`, a resource monitor, and a statement timeout. Anonymous traffic is anonymous compute spend; the resource monitor is the thing that stops a scraper or a bored visitor from running up a bill.
+
+**Cheaper alternative: ship the data with the app.** Since v1 ranks a completed season rather than live in-season data, the marts can be exported to a Parquet/DuckDB file and bundled with the deployment. The app then queries the local file, public traffic never touches Snowflake, cost is effectively zero, and there is no service account to leak. Filtering and PPR re-ranking still work — DuckDB runs the same SQL locally. The tradeoff is a rebuild-and-redeploy step whenever the data refreshes, which is acceptable at weekly or seasonal cadence and only becomes wrong if the data starts updating live.
+
+**Recommendation:** SiS privately first; when going public, Streamlit Community Cloud with the bundled DuckDB export. Add the read-only Snowflake service account only once the dashboard genuinely needs live data.
 
 ---
 
