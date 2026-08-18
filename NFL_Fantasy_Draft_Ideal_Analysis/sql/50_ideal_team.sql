@@ -1,5 +1,5 @@
 -- 50_ideal_team.sql — the ideal-team board, one per scoring mode (README §1, §5).
--- NOT YET EXECUTED: authored without a Snowflake account.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 --
 -- Slot depth is a parameter, not hard-coded: it lives in SLOT_DEPTH, so
 -- changing 25 RB to 30 is an UPDATE, not a query edit.

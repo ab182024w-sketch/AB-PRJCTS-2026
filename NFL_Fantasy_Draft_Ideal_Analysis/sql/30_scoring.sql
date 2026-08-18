@@ -1,8 +1,8 @@
 -- 30_scoring.sql — SCORING_RULES (all three modes) and FCT_PLAYER_SCORING
 -- (README §4, §5).
--- NOT YET EXECUTED: authored without a Snowflake account. The identical rule
--- set is mirrored in pipeline/scoring.py and was verified against the real 2025
--- CSVs by pipeline/validate_scoring.py — keep the two in sync.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season). The
+-- identical rule set is mirrored in pipeline/scoring.py and was verified against
+-- the real 2025 CSVs by pipeline/validate_scoring.py — keep the two in sync.
 
 USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;

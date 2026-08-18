@@ -1,7 +1,7 @@
 -- 99_tests.sql — the README §6 data-quality assertions.
--- NOT YET EXECUTED against Snowflake; every check below was however run in
--- pandas over the real 2025 CSVs by pipeline/validate_scoring.py, and the
--- thresholds encode what that run actually found (see the notes inline).
+-- Executed against Snowflake on the 2025 season: all nine error-level checks
+-- return 0 failures, and the two warn-level reconciliations fire as expected
+-- (the source's own inconsistencies, quantified in README §12).
 --
 -- Every check writes one row into TEST_RESULTS. A failure blocks promotion to
 -- MARTS; the two reconciliations are warn-level because the *source itself* is

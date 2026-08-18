@@ -1,7 +1,7 @@
 -- 10_raw.sql — the three RAW tables and their COPY INTO loads (README §2, §5).
 -- Three tables, not one: the offensive, kicker and IDP files share only their
 -- five key columns. Everything lands as VARCHAR; typing happens in staging.
--- NOT YET EXECUTED: authored without a Snowflake account.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 
 USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;
@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS DEFENSE_SEASON_RAW LIKE DEFENSE_RAW;
 TRUNCATE TABLE IF EXISTS OFFENSE_RAW;
 TRUNCATE TABLE IF EXISTS K_RAW;
 TRUNCATE TABLE IF EXISTS DEFENSE_RAW;
+TRUNCATE TABLE IF EXISTS OFFENSE_SEASON_RAW;
+TRUNCATE TABLE IF EXISTS K_SEASON_RAW;
+TRUNCATE TABLE IF EXISTS DEFENSE_SEASON_RAW;
 
 COPY INTO OFFENSE_RAW
 FROM (
@@ -126,10 +129,15 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/[0-9]{1,2}/(QB|RB|WR|TE)[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/[0-9]{1,2}/(QB|RB|WR|TE)[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
+
+-- Review, do not ignore, whatever ON_ERROR = CONTINUE skipped. VALIDATE's
+-- '_last' means "the last COPY in this session", so each call has to sit
+-- immediately after its own COPY.
+SELECT * FROM TABLE(VALIDATE(OFFENSE_RAW, JOB_ID => '_last'));
 
 COPY INTO K_RAW
 FROM (
@@ -141,26 +149,30 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/[0-9]{1,2}/K[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/[0-9]{1,2}/K[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
+
+SELECT * FROM TABLE(VALIDATE(K_RAW, JOB_ID => '_last'));
 
 COPY INTO DEFENSE_RAW
 FROM (
     SELECT
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23,
+        $21, $22, $23, $24,
         METADATA$FILENAME,
         METADATA$FILE_ROW_NUMBER,
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/[0-9]{1,2}/(DB|LB|DL)[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/[0-9]{1,2}/(DB|LB|DL)[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
+
+SELECT * FROM TABLE(VALIDATE(DEFENSE_RAW, JOB_ID => '_last'));
 
 -- Season files sit at <season>/<POS>_season.csv — one directory level up, which
 -- is what separates them from the weekly pattern above. They have no
@@ -176,7 +188,7 @@ FROM (
         CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/(QB|RB|WR|TE)_season[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/(QB|RB|WR|TE)_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
@@ -189,7 +201,7 @@ FROM (
         METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/K_season[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/K_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
@@ -199,16 +211,11 @@ FROM (
     SELECT
         $1, $2, $3, $4, NULL,
         $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19,
-        $20, $21, $22,
+        $20, $21, $22, $23,
         METADATA$FILENAME, METADATA$FILE_ROW_NUMBER, CURRENT_TIMESTAMP()
     FROM @RAW.FANTASY_STAGE
 )
-PATTERN = '.*/[0-9]{4}/(DB|LB|DL)_season[.]csv([.]gz)?'
+PATTERN = '.*[0-9]{4}/(DB|LB|DL)_season[.]csv([.]gz)?'
 FILE_FORMAT = (FORMAT_NAME = RAW.FF_NFL_CSV)
 ON_ERROR = CONTINUE
 FORCE = TRUE;
-
--- Review, do not ignore, whatever ON_ERROR = CONTINUE skipped.
-SELECT * FROM TABLE(VALIDATE(OFFENSE_RAW, JOB_ID => '_last'));
-SELECT * FROM TABLE(VALIDATE(K_RAW,       JOB_ID => '_last'));
-SELECT * FROM TABLE(VALIDATE(DEFENSE_RAW, JOB_ID => '_last'));

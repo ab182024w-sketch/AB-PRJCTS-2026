@@ -147,8 +147,16 @@ def aggregate_season(scored: pd.DataFrame) -> pd.DataFrame:
 
 
 def team_defense(scored: pd.DataFrame) -> pd.DataFrame:
-    """FCT_TEAM_DEFENSE: DB+LB+DL summed to the team, season grain. Excludes FA."""
-    defense = scored[scored["pos"].isin(DEFENSE_POSITIONS) & (scored["team"] != "FA")]
+    """FCT_TEAM_DEFENSE: DB+LB+DL summed to the team, season grain.
+
+    Excludes FA rows (no team attribution) and bye rows, so `weeks` is games
+    played (17), not calendar weeks (18).
+    """
+    defense = scored[
+        scored["pos"].isin(DEFENSE_POSITIONS)
+        & (scored["team"] != "FA")
+        & ~scored["is_bye"]
+    ]
     return (
         defense.groupby(["season", "team", "scoring_mode"], observed=True)
         .agg(total_pts=("def_pts", "sum"), weeks=("week", "nunique"))
@@ -164,7 +172,7 @@ def ideal_team(agg: pd.DataFrame, defense: pd.DataFrame, depth: dict[str, int]) 
     for slot, n in depth.items():
         if slot == "DEF":
             board = (
-                defense.sort_values("total_pts", ascending=False)
+                defense.sort_values(["total_pts", "team"], ascending=[False, True])
                 .groupby("scoring_mode", observed=True)
                 .head(n)
                 .assign(slot="DEF", player_name=lambda d: d["team"] + " D/ST", player_id=None,
@@ -173,7 +181,7 @@ def ideal_team(agg: pd.DataFrame, defense: pd.DataFrame, depth: dict[str, int]) 
         else:
             board = (
                 agg[agg["pos"] == slot]
-                .sort_values("total_pts", ascending=False)
+                .sort_values(["total_pts", "player_id"], ascending=[False, True])
                 .groupby("scoring_mode", observed=True)
                 .head(n)
                 .assign(slot=slot)

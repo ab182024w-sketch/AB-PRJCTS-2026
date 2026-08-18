@@ -553,8 +553,8 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | `pipeline/download.py` | **Built and run.** 152/152 files for 2025, 49,658 data rows; a second run rewrote nothing. See `reference/PHASE0_DOWNLOAD_2025.md` |
 | `pipeline/scoring.py` | Rule set and stat-name mapping shared by the harness; the Python mirror of `sql/30_scoring.sql` |
 | `pipeline/validate_scoring.py` | **Built and run.** Runs the same tall-shape + rules-join logic in pandas, prints all three boards, and runs the §6 assertions |
-| `sql/00…99_*.sql` | **Authored, never executed** — no Snowflake account was available. Syntax and object dependencies are unverified against a live warehouse |
-| Reference boards | `reference/ideal_team_2025_{standard,half_ppr,full_ppr}.csv`, produced by the harness (not by Snowflake) |
+| `sql/00…99_*.sql` | **Run end-to-end on Snowflake** for 2025: 152 files staged, 47,032 raw rows, 76,359 staging rows, 141,096 scored player-weeks, 273 `IDEAL_TEAM` rows (91 slots × 3 modes). All nine error-level checks return 0 |
+| Reference boards | `reference/ideal_team_2025_{standard,half_ppr,full_ppr}.csv`, produced by the harness; all 273 Snowflake `IDEAL_TEAM` rows match them exactly. Run log: `reference/PHASE1_SNOWFLAKE_RUN.md` |
 | Phases 1.5, 1.6, 2, 3, 4 | Not started |
 
 The harness is a verification tool, not a second pipeline: it exists so the scoring rules and the

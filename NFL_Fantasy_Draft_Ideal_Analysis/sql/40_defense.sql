@@ -1,6 +1,6 @@
 -- 40_defense.sql — FCT_TEAM_DEFENSE: DB+LB+DL rolled up to the team, per week
 -- then per season (README §4, §5).
--- NOT YET EXECUTED: authored without a Snowflake account.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 --
 -- Limitation stated up front: points allowed and yards allowed are team-game
 -- outcomes and are absent from a player-stat source, so this ranks defensive

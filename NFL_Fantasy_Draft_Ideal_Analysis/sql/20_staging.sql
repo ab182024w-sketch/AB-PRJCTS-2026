@@ -1,6 +1,6 @@
 -- 20_staging.sql — STG_PLAYER_WEEK: typed, cleaned, path-parsed, unioned onto
 -- the common tall/EAV shape (README §3, §5).
--- NOT YET EXECUTED: authored without a Snowflake account.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 --
 -- Shape: (season, week, player_id, pos, team, opponent, is_away, is_bye,
 --         is_playoff, stat, value). One row per stat per player per week.

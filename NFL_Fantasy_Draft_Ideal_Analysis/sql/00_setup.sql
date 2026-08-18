@@ -1,6 +1,6 @@
 -- 00_setup.sql — database, schemas, warehouse, file format, stage (README §5).
 -- Run once. Every later script assumes these objects exist.
--- NOT YET EXECUTED: no Snowflake account was available when this was authored.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 
 CREATE WAREHOUSE IF NOT EXISTS FANTASY_WH
     WAREHOUSE_SIZE = 'XSMALL'

@@ -1,6 +1,6 @@
 -- 35_season_agg.sql — AGG_PLAYER_SEASON: season totals plus per-game and
 -- consistency metrics (README §3).
--- NOT YET EXECUTED: authored without a Snowflake account.
+-- Executed end-to-end against Snowflake (FANTASY database, 2025 season).
 
 USE WAREHOUSE FANTASY_WH;
 USE DATABASE FANTASY;
