@@ -137,12 +137,13 @@ Consequences that shape the whole pipeline:
 - **Deduplication keys on `(season, week, PlayerId)`.** With a real week, the earlier hazard (a division rival appearing twice, indistinguishable without a week) disappears. Exact duplicates within that key indicate a double load and are dropped, keeping the last-loaded row.
 - **Bye rows are excluded from `games_played`.** They exist in the data as `PlayerOpponent = 'Bye'` with no stats. Counting them would deflate every per-game average. Zero-stat rows for players who were active but did not produce *are* counted — that is a real zero.
 - **`Team = 'FA'` rows** (unsigned players) carry no meaningful team attribution and are excluded from the team-defense roll-up.
+- **Playoff weeks are flagged, not split out.** Staging carries an `is_playoff` boolean (weeks 15–18 of the fantasy calendar). Season totals and all rankings **include** these weeks — the flag exists so the UI can highlight championship-week production, and so a "regular season only" filter is a one-line `WHERE` if it is ever wanted, not a second set of marts.
 
 ---
 
 ## 4. Scoring Rules
 
-**All three PPR modes are canonical.** Standard (0 PPR), half-PPR (0.5), and full PPR (1.0) are each first-class outputs — not one default with variants. Every mart carries `scoring_mode` as a column, so the ideal-team board exists three times over and the three can be diffed directly (the RB/WR/TE ordering is where they diverge; QB and K are essentially unaffected).
+**All three PPR modes are canonical, and standard is the default view.** Standard (0 PPR), half-PPR (0.5), and full PPR (1.0) are each computed and stored in full; standard is simply what the UI lands on, with a toggle to the other two (§8). "Default" here is a display choice only — no mode is privileged in the data. Every mart carries `scoring_mode` as a column, so the ideal-team board exists three times over and the three can be diffed directly (the RB/WR/TE ordering is where they diverge; QB and K are essentially unaffected).
 
 Scoring lives in a `SCORING_RULES` table keyed by `(scoring_mode, stat_column, points_per_unit)`, joined to the fact table — not hard-coded in SQL. Adding a league's custom rules is then an `INSERT`, and the three modes are three sets of rows rather than three queries.
 
@@ -328,7 +329,8 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 **Phase 2 — Front end (future)** — stack recommendation in §8
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
 - Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/kick/def`) and a **week-by-week chart**; a team-defense comparison view.
-- Interactive scoring: a three-way PPR mode selector and editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules.
+- Interactive scoring: a three-way PPR mode selector **defaulting to standard**, plus editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules. Because all three modes are precomputed, switching modes is a filter on `scoring_mode` and should be instant; only edited point values trigger a real recompute.
+- Playoff weeks (15–18) are **visually highlighted** in the week-by-week chart and player tables — shaded band on the chart, marker on the table — but are still included in every total. The question "who carried you in the championship" is answered by looking, not by switching to a separate board.
 - Design intent: dark-mode-first, position-color-coded, fast — the table is the product, so sorting and filtering must feel instant.
 - **Mobile-readable from day one** (§8, "Mobile"). This is a hard requirement for the web app, and separate from the native apps in Phase 4.
 
@@ -508,11 +510,11 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | "Top 5 Defenses" | **Team** defenses — `DB`+`LB`+`DL` aggregated to `Team`, not individual defenders (§1, §5) |
 | Kicker slot | In scope for v1; `K.csv` has PAT and distance-bucketed field goals (§2, §4) |
 | Mobile | Responsive web from the first release; native iOS/Android is a distant Phase 4 (§7, §8) |
+| Default scoring mode | **Standard** is the landing default; a toggle switches to half/full PPR live. All three stay precomputed, so the toggle is a filter, not a recalculation (§4, §8) |
+| Playoff weeks | **Highlighted, not separated.** Weeks 15–18 are flagged `is_playoff` and called out visually, but season totals and rankings still include them (§3, §8) |
 | Points allowed / yards allowed | **Yes, addable.** hvpkod has no team file, but nflverse-data supplies both; scheduled as Phase 1.6 (§5a) |
 
 ### Still open
 
 1. **Which offensive-yards definition counts as "yards allowed"** — nflverse's team-week splits let you include or exclude sack yardage and return yardage, and leagues differ. Minor, but it moves defenses across tier boundaries.
-2. **Which scoring mode headlines the UI** when only one board can be shown at a time (all three are computed regardless).
-3. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
-4. **Playoff weeks.** Whether weeks 15–18 should be separable from the regular season for "who won championships" views.
+2. **Kicker and IDP point values** are league-dependent; the defaults in §4 should be checked against the actual league's settings.
