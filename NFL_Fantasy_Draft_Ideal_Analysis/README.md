@@ -13,11 +13,13 @@ Load per-week NFL player statistics into Snowflake, compute fantasy points from 
 | Slot | Count | Notes |
 | --- | --- | --- |
 | QB | 10 | Ranked by season fantasy points |
-| RB | 10 | Ranked by season fantasy points |
-| WR | 10 | Ranked by season fantasy points |
-| TE | 10 | Ranked by season fantasy points |
+| RB | 25 | Ranked by season fantasy points — deeper than a starting lineup, to cover bench/flex |
+| WR | 25 | Ranked by season fantasy points — deeper than a starting lineup, to cover bench/flex |
+| TE | 25 | Ranked by season fantasy points — deeper than a starting lineup, to cover bench/flex |
 | K | 1 | Single highest-scoring kicker, from `K.csv` field-goal/PAT stats |
 | DEF | 5 | **Team** defenses — `DB` + `LB` + `DL` players aggregated up to their `Team` (confirmed: team level, not individual defenders) |
+
+RB/WR/TE run 25 deep because real rosters carry a bench and a flex, so the useful board extends well past the starters; QB stays at 10 since only one starts. Slot depth is a parameter of the final query, not hard-coded, so these counts can change without touching anything upstream.
 
 The output is a ranked "ideal team" board — the players who *actually* produced the most, which doubles as a draft-value reference and a season-in-review. The board is produced three times, once per scoring mode (§4).
 
@@ -313,7 +315,7 @@ Run as assertions after each load; a failure blocks promotion to MARTS.
 6. `sql/40_defense.sql` — `FCT_TEAM_DEFENSE` roll-up.
 7. `sql/50_ideal_team.sql` — the final ideal-team query.
 8. `sql/99_tests.sql` — the data-quality assertions from §6, including both reconciliations.
-9. Documented output: the ideal team board (10 QB / 10 RB / 10 WR / 10 TE / 1 K / 5 DEF) exported to CSV **once per scoring mode** and committed as a reference result.
+9. Documented output: the ideal team board (10 QB / 25 RB / 25 WR / 25 TE / 1 K / 5 DEF) exported to CSV **once per scoring mode** and committed as a reference result.
 
 **Phase 1.5 — Season refresh for 2026**
 - The 2025 files are complete and static; the 2026 season re-runs Phase 0 weekly against `NFL-data-Players/2026/{week}/`.
