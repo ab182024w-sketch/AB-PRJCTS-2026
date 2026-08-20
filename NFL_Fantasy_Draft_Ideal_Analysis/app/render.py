@@ -31,15 +31,18 @@ POSITION_COLORS = {
 
 CSS = """
 <style>
+/* Grey at low alpha reads against a dark and a light background alike, and
+   muted text is dimmed with opacity rather than a fixed colour, so the board
+   follows whichever appearance Streamlit is set to. */
 :root {
-  --board-bg: rgba(255,255,255,0.02);
-  --board-line: rgba(255,255,255,0.09);
-  --board-muted: rgba(250,250,250,0.55);
+  --board-bg: rgba(128,128,128,0.10);
+  --board-line: rgba(128,128,128,0.35);
+  --board-muted-alpha: 0.65;
 }
 .board { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .board th {
   text-align: right; font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--board-muted); font-weight: 600; padding: 0.45rem 0.5rem;
+  color: inherit; opacity: var(--board-muted-alpha); font-weight: 600; padding: 0.45rem 0.5rem;
   border-bottom: 1px solid var(--board-line); white-space: nowrap;
 }
 .board th.left, .board td.left { text-align: left; }
@@ -48,19 +51,19 @@ CSS = """
   white-space: nowrap;
 }
 .board tr:hover td { background: var(--board-bg); }
-.board .rank { color: var(--board-muted); width: 2.5rem; }
+.board .rank { opacity: var(--board-muted-alpha); width: 2.5rem; }
 .board .name { font-weight: 600; }
 .board .lead { font-weight: 700; }
 .pill {
   display: inline-block; padding: 0.05rem 0.4rem; border-radius: 999px;
   font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; color: #10131a;
 }
-.team { color: var(--board-muted); font-size: 0.78rem; margin-left: 0.35rem; }
+.team { opacity: var(--board-muted-alpha); font-size: 0.78rem; margin-left: 0.35rem; }
 .slot-head {
   display: flex; align-items: baseline; gap: 0.5rem; margin: 1.4rem 0 0.2rem;
 }
 .slot-head h3 { margin: 0; font-size: 1.05rem; }
-.slot-head span { color: var(--board-muted); font-size: 0.8rem; }
+.slot-head span { opacity: var(--board-muted-alpha); font-size: 0.8rem; }
 
 /* Phone: every row becomes a card. Headers are dropped and each cell carries
    its own label, so nothing scrolls sideways. */
@@ -76,7 +79,7 @@ CSS = """
     display: flex; justify-content: space-between; align-items: baseline;
   }
   .board td::before {
-    content: attr(data-label); color: var(--board-muted);
+    content: attr(data-label); opacity: var(--board-muted-alpha);
     font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
   }
   .board td.headline {

@@ -272,7 +272,14 @@ def rules_page(mode: str) -> None:
 
     if applied:
         st.session_state.setdefault("custom_rules", {})[mode] = edited
-        changed = {stat: value for stat, value in edited.items() if value != shipped[stat]}
+        # Every tab is rendered in one pass, and the boards were drawn before this
+        # form was submitted. Without the rerun the edited rules would not reach
+        # them until the user's next interaction.
+        st.rerun()
+
+    stored = st.session_state.get("custom_rules", {}).get(mode)
+    if stored is not None:
+        changed = {stat: value for stat, value in stored.items() if value != shipped[stat]}
         if changed:
             st.success(f'{len(changed)} rule(s) changed: {", ".join(sorted(changed))}')
         else:

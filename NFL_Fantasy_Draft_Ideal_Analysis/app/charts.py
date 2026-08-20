@@ -26,18 +26,32 @@ COMPONENT_LABELS = {
 PLAYOFF_START = 15
 PLAYOFF_BAND = "rgba(255, 209, 102, 0.12)"
 
+# The theme is chosen in the browser, so the server cannot know which one is
+# active. Mid-grey ink and gridlines on a transparent canvas stay legible under
+# both instead of committing the figures to a dark background.
+NEUTRAL_INK = "#8b949e"
+NEUTRAL_LINE = "rgba(128,128,128,0.3)"
+
 
 def _layout(figure: go.Figure, height: int) -> go.Figure:
     figure.update_layout(
         height=height,
         margin={"l": 10, "r": 10, "t": 30, "b": 10},
-        template="plotly_dark",
+        template="plotly",
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": NEUTRAL_INK},
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.0, "x": 0},
         hovermode="x unified",
         dragmode=False,
     )
+    axes = {
+        "gridcolor": NEUTRAL_LINE,
+        "zerolinecolor": NEUTRAL_LINE,
+        "linecolor": NEUTRAL_LINE,
+    }
+    figure.update_xaxes(**axes)
+    figure.update_yaxes(**axes)
     return figure
 
 
@@ -111,7 +125,7 @@ def defense_scatter(defenses: pd.DataFrame, top: int) -> go.Figure:
         figure.add_hline(
             y=cutoff,
             line_dash="dot",
-            line_color="rgba(255,255,255,0.3)",
+            line_color=NEUTRAL_LINE,
             annotation_text=f"top {top} cutoff",
             annotation_font_size=11,
         )
