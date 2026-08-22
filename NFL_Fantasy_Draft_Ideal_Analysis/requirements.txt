@@ -3,3 +3,12 @@ requests>=2.31
 
 # Needed by pipeline.run_sql and pipeline.download --put-to-stage
 snowflake-connector-python>=3.7
+
+# Phase 2 dashboard (app/streamlit_app.py)
+streamlit>=1.49
+plotly>=5.22
+
+# Public deployment without Snowflake credentials: app/data.py reads the Parquet
+# snapshot written by pipeline.export_marts through DuckDB.
+duckdb>=1.0
+pyarrow>=15.0

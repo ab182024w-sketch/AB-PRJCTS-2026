@@ -17,6 +17,12 @@ python -m pipeline.run_sql --season 2025 --all
 
 # same scoring, locally, as an independent check on the SQL
 python -m pipeline.validate_scoring --season 2025 --out reference/
+
+# Phase 2 dashboard — reads Snowflake if credentials are set, the snapshot if not
+streamlit run app/streamlit_app.py
+
+# optional: bundle the marts as Parquet so the app runs with no warehouse at all
+python -m pipeline.export_marts --season 2025
 ```
 
 Re-running any of these is safe, and `--season` is the only thing to change in 2026 (§7, Phase 1.5).
@@ -376,13 +382,26 @@ Both reconciliations are scoped to the target season: they join on `player_id`, 
 - Deliberately sequenced *after* Phase 1 rather than inside it: the DEF board is usable without it, and keeping the second source separate means a broken upstream release never blocks the core rankings — the local harness still runs, IDP-only, when the feed is absent.
 - Live results and the verification run: `reference/PHASE15_16_SNOWFLAKE_RUN.md`.
 
-**Phase 2 — Front end (future)** — stack recommendation in §8
+**Phase 2 — Front end (done)** — stack recommendation in §8; built as `app/`, run with `streamlit run app/streamlit_app.py`
 - A web UI to browse the ideal team and the underlying rankings, not just a static CSV.
 - Views: a roster board grouped by slot; a sortable/filterable player table (position, team, PPR mode, min games); a player detail page with the scoring breakdown (`pass/rush/rec/kick/def`) and a **week-by-week chart**; a team-defense comparison view.
 - Interactive scoring: a three-way PPR mode selector **defaulting to standard**, plus editable point values that re-rank live, so the "ideal team" can be recomputed under league-specific rules. Because all three modes are precomputed, switching modes is a filter on `scoring_mode` and should be instant; only edited point values trigger a real recompute.
 - Playoff weeks (15–18) are **visually highlighted** in the week-by-week chart and player tables — shaded band on the chart, marker on the table — but are still included in every total. The question "who carried you in the championship" is answered by looking, not by switching to a separate board.
 - Design intent: dark-mode-first, position-color-coded, fast — the table is the product, so sorting and filtering must feel instant.
 - **Mobile-readable from day one** (§8, "Mobile"). This is a hard requirement for the web app, and separate from the native apps in Phase 4.
+
+As built:
+
+| Piece | File | Note |
+| --- | --- | --- |
+| App | `app/streamlit_app.py` | Five tabs: Ideal team, Rankings, Player, Defense, League rules |
+| SQL | `app/queries.py` | One dialect that runs on both Snowflake and DuckDB, so the two backends cannot drift |
+| Backend | `app/data.py` | Streamlit in Snowflake → Snowflake connector → bundled snapshot, in that order |
+| Board | `app/render.py` | One HTML table that CSS collapses into a card per player below 700px |
+| Charts | `app/charts.py` | Weeks 15–18 shaded, never split out of the totals |
+| Snapshot | `pipeline/export_marts.py` | Marts → Parquet, for public hosting without Snowflake credentials |
+
+Editable point values re-score in SQL from `STG_PLAYER_WEEK` rather than in pandas, so `sql/50_ideal_team.sql` stays the only definition of the board. `tests/test_custom_board.py` pins that: fed the shipped rule values, the interactive query reproduces `MARTS.IDEAL_TEAM` exactly, in all three modes, on both engines.
 
 **Phase 3 — Waiver-wire tracking scraper (future)** — stack recommendation in §9
 - A scheduled Python scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
