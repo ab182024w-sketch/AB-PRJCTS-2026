@@ -96,6 +96,59 @@ def _values_clause(rules: dict[str, float]) -> str:
     return f"(VALUES {rows}) AS r(stat, points_per_unit)"
 
 
+def _weekly_cte(rules: dict[str, float], season: int) -> str:
+    """Per-week player points under `rules` — the base every custom view shares."""
+    return f"""rules AS (SELECT * FROM {_values_clause(rules)}),
+weekly AS (
+    -- The fact table is the spine, not the stat lines: it holds a row for every
+    -- player-week, while the long staging table only carries non-empty cells. A
+    -- week in which nothing was recorded is still a game played, so driving off
+    -- the stat lines alone would deflate per-game averages and, for a player
+    -- traded late, report the wrong current team. Both joins are LEFT for the
+    -- same reason. One scoring mode is picked because the spine is identical in
+    -- all three; only the point values differ, and those come from `rules`.
+    SELECT f.season, f.week, f.is_playoff, f.player_id, f.pos,
+           MIN(f.player_name) AS player_name,
+           MIN(f.team)        AS team,
+           COALESCE(SUM(s.value * r.points_per_unit), 0) AS total_pts
+    FROM {{fct}} f
+    LEFT JOIN {{stg}} s
+           ON s.season = f.season AND s.week = f.week
+          AND s.player_id = f.player_id AND s.pos = f.pos
+          AND NOT s.is_bye
+    LEFT JOIN rules r ON r.stat = s.stat
+    WHERE f.season = {int(season)} AND NOT f.is_bye
+      AND f.scoring_mode = {quote("standard")}
+    GROUP BY f.season, f.week, f.is_playoff, f.player_id, f.pos
+)"""
+
+
+def custom_player_season(rules: dict[str, float], season: int) -> str:
+    """`AGG_PLAYER_SEASON` recomputed from league-specific point values, with the
+    columns the rankings board reads."""
+    return f"""
+WITH {_weekly_cte(rules, season)},
+last_week AS (SELECT season, MAX(week) AS max_week FROM weekly GROUP BY season)
+SELECT w.player_id,
+       MIN(w.player_name) AS player_name,
+       w.pos,
+       MAX_BY(w.team, w.week) AS team,
+       ROUND(SUM(w.total_pts), 2) AS total_pts,
+       COUNT(DISTINCT w.week)     AS games_played,
+       ROUND(SUM(w.total_pts) / NULLIF(COUNT(DISTINCT w.week), 0), 2) AS pts_per_game,
+       ROUND(STDDEV_SAMP(w.total_pts), 2) AS stddev_pts,
+       ROUND(PERCENTILE_CONT(0.20) WITHIN GROUP (ORDER BY w.total_pts), 2) AS floor_pts,
+       ROUND(PERCENTILE_CONT(0.80) WITHIN GROUP (ORDER BY w.total_pts), 2) AS ceiling_pts,
+       ROUND(SUM(CASE WHEN w.is_playoff THEN w.total_pts ELSE 0 END), 2) AS playoff_pts,
+       ROUND(AVG(CASE WHEN w.week > l.max_week - 4 THEN w.total_pts END), 2)
+           AS last_4_pts_per_game
+FROM weekly w
+JOIN last_week l ON l.season = w.season
+GROUP BY w.player_id, w.pos
+ORDER BY total_pts DESC
+"""
+
+
 def custom_board(rules: dict[str, float], season: int, tier_mode: str = "standard") -> str:
     """The ideal-team board recomputed from league-specific point values.
 
@@ -105,19 +158,7 @@ def custom_board(rules: dict[str, float], season: int, tier_mode: str = "standar
     slots = ", ".join(f"('{slot}', {depth})" for slot, depth in SLOT_DEPTH)
     idp = ", ".join(quote(pos) for pos in IDP_POSITIONS)
     return f"""
-WITH rules AS (SELECT * FROM {_values_clause(rules)}),
-weekly AS (
-    SELECT s.season, s.week, s.is_playoff, s.player_id, s.pos,
-           MIN(s.player_name) AS player_name,
-           MIN(s.team)        AS team,
-           SUM(COALESCE(s.value * r.points_per_unit, 0)) AS total_pts
-    -- LEFT, so a week in which a player recorded only unscored stats is still a
-    -- game played. An inner join here silently deflates every per-game average.
-    FROM {{stg}} s
-    LEFT JOIN rules r ON r.stat = s.stat
-    WHERE s.season = {int(season)} AND NOT s.is_bye
-    GROUP BY s.season, s.week, s.is_playoff, s.player_id, s.pos
-),
+WITH {_weekly_cte(rules, season)},
 player_season AS (
     SELECT season, player_id, pos,
            MIN(player_name)  AS player_name,

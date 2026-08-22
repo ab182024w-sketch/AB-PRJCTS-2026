@@ -96,16 +96,22 @@ def sidebar_controls(seasons: list[int]) -> tuple[int, str, bool]:
     return int(season), str(mode), bool(detail)
 
 
+CUSTOM_RULES_NOTE = (
+    "Custom league rules are active — these numbers are recomputed from the raw "
+    "stat lines, not read from the precomputed marts."
+)
+SHIPPED_ONLY_NOTE = (
+    "Custom league rules are active, but this tab still shows the shipped {mode} "
+    "values — the weekly component split is only precomputed for them."
+)
+
+
 def ideal_team_page(season: int, mode: str, detail: bool) -> None:
     rules = active_rules(mode)
     if rules is None:
         board = run_query(queries.IDEAL_TEAM, season=season, mode=mode)
     else:
-        st.info(
-            "Custom league rules are active — this board is recomputed from the raw "
-            "stat lines, not from the precomputed `MARTS.IDEAL_TEAM`.",
-            icon="⚙️",
-        )
+        st.info(CUSTOM_RULES_NOTE, icon="⚙️")
         board = run_query(queries.custom_board(rules, season))
 
     st.caption(
@@ -135,7 +141,13 @@ def ideal_team_page(season: int, mode: str, detail: bool) -> None:
 
 
 def rankings_page(season: int, mode: str, detail: bool) -> None:
-    players = run_query(queries.PLAYER_SEASON, season=season, mode=mode)
+    rules = active_rules(mode)
+    if rules is None:
+        players = run_query(queries.PLAYER_SEASON, season=season, mode=mode)
+    else:
+        st.info(CUSTOM_RULES_NOTE, icon="⚙️")
+        players = run_query(queries.custom_player_season(rules, season))
+
     with st.expander("Filters", expanded=False):
         left, right = st.columns(2)
         positions = right.multiselect(
@@ -169,6 +181,8 @@ def rankings_page(season: int, mode: str, detail: bool) -> None:
 
 
 def player_page(season: int, mode: str) -> None:
+    if active_rules(mode) is not None:
+        st.info(SHIPPED_ONLY_NOTE.format(mode=MODES[mode]), icon="⚙️")
     players = run_query(queries.PLAYER_SEASON, season=season, mode=mode)
     labels = {
         f'{row.player_name} · {row.pos} · {row.team}': row.player_id
@@ -219,6 +233,8 @@ def player_page(season: int, mode: str) -> None:
 
 
 def defense_page(season: int, mode: str, detail: bool) -> None:
+    if active_rules(mode) is not None:
+        st.info(SHIPPED_ONLY_NOTE.format(mode=MODES[mode]), icon="⚙️")
     defenses = run_query(queries.TEAM_DEFENSE, season=season, mode=mode)
     st.caption(
         "Team defense is DB + LB + DL rolled up, plus the points-allowed and "

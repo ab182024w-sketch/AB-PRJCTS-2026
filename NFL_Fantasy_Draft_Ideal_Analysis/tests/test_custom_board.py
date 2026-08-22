@@ -38,7 +38,7 @@ pytestmark = pytest.mark.skipif(
 def connection():
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect(database=":memory:")
-    for name in ("ideal_team", "team_def_week", "stg", "rules"):
+    for name in ("ideal_team", "team_def_week", "stg", "rules", "agg", "fct"):
         con.execute(
             f"CREATE VIEW {name} AS SELECT * FROM read_parquet('{SNAPSHOT / f'{name}.parquet'}')"
         )
@@ -57,7 +57,9 @@ def test_custom_board_matches_ideal_team(connection, mode: str) -> None:
     rules = shipped_rules(connection, mode)
     assert rules, f"no shipped rules for {mode}"
 
-    sql = queries.custom_board(rules, SEASON).format(stg="stg", team_def_week="team_def_week")
+    sql = queries.custom_board(rules, SEASON).format(
+        stg="stg", fct="fct", team_def_week="team_def_week"
+    )
     computed = connection.execute(sql).fetch_df().set_index(KEY).sort_index()
     expected = (
         connection.execute(
@@ -77,6 +79,35 @@ def test_custom_board_matches_ideal_team(connection, mode: str) -> None:
             expected[mismatched], rsuffix="_expected"
         )
     assert (computed["total_pts"] - expected["total_pts"]).abs().max() < 0.011
+
+
+@pytest.mark.parametrize("mode", ["standard", "half_ppr", "full_ppr"])
+def test_custom_player_season_matches_the_season_agg(connection, mode: str) -> None:
+    """The rankings board re-scores too, so it needs the same parity guarantee."""
+    rules = shipped_rules(connection, mode)
+    sql = queries.custom_player_season(rules, SEASON).format(stg="stg", fct="fct")
+    computed = connection.execute(sql).fetch_df().set_index("player_id").sort_index()
+    expected = (
+        connection.execute(
+            "SELECT player_id, player_name, pos, team, total_pts, games_played, "
+            "playoff_pts, last_4_pts_per_game "
+            "FROM agg WHERE season = ? AND scoring_mode = ?",
+            [SEASON, mode],
+        )
+        .fetch_df()
+        .set_index("player_id")
+        .sort_index()
+    )
+
+    # Every player in the mart, including the ones who never recorded a stat.
+    assert len(computed) == len(expected)
+    for column in ("player_name", "pos", "team", "games_played"):
+        mismatched = computed[column] != expected[column]
+        assert not mismatched.any(), computed[mismatched].join(
+            expected[mismatched], rsuffix="_expected"
+        )
+    for column in ("total_pts", "playoff_pts", "last_4_pts_per_game"):
+        assert (computed[column] - expected[column]).abs().max() < 0.011, column
 
 
 def test_slot_depths_match_the_readme() -> None:
