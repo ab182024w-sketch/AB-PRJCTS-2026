@@ -1,6 +1,6 @@
 # NFL Fantasy Draft — Ideal Team Analysis
 
-Scope definition for the Snowflake-based fantasy football optimizer. Phase 0 and Phase 1 are now built — see **§12 Implementation status**, which also records the three places the real data contradicted this spec.
+Scope definition for the Snowflake-based fantasy football optimizer. Phases 0, 1, 1.5, 1.6, 2 and 3 are now built — see **§12 Implementation status**, which also records the places the real data contradicted this spec.
 
 Source data: [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), 2025 season (2026 once it starts).
 
@@ -354,10 +354,10 @@ Both reconciliations are scoped to the target season: they join on `player_id`, 
 
 ## 7. Deliverables
 
-**Phase 0 — Data acquisition**
+**Phase 0 — Data acquisition (done)**
 - A small Python script that pulls `NFL-data-Players/2025/{1..18}/{POS}.csv` from the source repo (plus `{POS}_season.csv` for reconciliation) into a local `data/` tree mirroring the season/week layout, then `PUT`s them to the Snowflake stage. Re-runnable and idempotent, since the 2026 season will re-run it weekly.
 
-**Phase 1 — Warehouse and rankings (this project's core)**
+**Phase 1 — Warehouse and rankings (this project's core) (done)**
 1. `sql/00_setup.sql` — database, schemas, warehouse, file formats, stage.
    - `sql/05_git_repository.sql` — optional: mounts this GitHub repo as a Snowflake `GIT REPOSITORY`, so Snowsight → Projects → Workspaces browses `sql/*.sql` in the same tree as GitHub and each file opens as a worksheet. Nothing downstream depends on it; re-run `ALTER GIT REPOSITORY … FETCH` after every push, since the mount is a snapshot, not a live view.
 2. `sql/10_raw.sql` — the three RAW tables and `COPY INTO` loads, with `season`/`week` from `METADATA$FILENAME`.
