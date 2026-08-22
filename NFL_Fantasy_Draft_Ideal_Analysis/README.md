@@ -9,6 +9,13 @@ Source data: [hvpkod/NFL-Data](https://github.com/hvpkod/NFL-Data), 2025 season 
 ```bash
 pip install -r requirements.txt
 
+# Phase 2 dashboard on the 2025 snapshot committed under data/snapshot/ — no credentials
+streamlit run app/streamlit_app.py
+```
+
+Everything below refreshes that data, and needs Snowflake:
+
+```bash
 # Phase 0 + 1.6 download, then PUT to the Snowflake stage
 python -m pipeline.download --season 2025 --weeks 1-18 --nflverse --put-to-stage
 
@@ -18,10 +25,7 @@ python -m pipeline.run_sql --season 2025 --all
 # same scoring, locally, as an independent check on the SQL
 python -m pipeline.validate_scoring --season 2025 --out reference/
 
-# Phase 2 dashboard — reads Snowflake if credentials are set, the snapshot if not
-streamlit run app/streamlit_app.py
-
-# optional: bundle the marts as Parquet so the app runs with no warehouse at all
+# re-bundle the marts as Parquet, so the credential-free dashboard shows the new season
 python -m pipeline.export_marts --season 2025
 ```
 
