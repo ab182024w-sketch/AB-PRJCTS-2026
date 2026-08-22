@@ -115,3 +115,7 @@ secrets.yaml
 
 # Downloaded source CSVs (Phase 0) — re-creatable with pipeline/download.py
 NFL_Fantasy_Draft_Ideal_Analysis/data/
+# ...except the mart snapshot the dashboard falls back to, which has to ship
+# with the app for it to run without Snowflake credentials (README §8).
+!NFL_Fantasy_Draft_Ideal_Analysis/data/snapshot/
+!NFL_Fantasy_Draft_Ideal_Analysis/data/snapshot/*.parquet
