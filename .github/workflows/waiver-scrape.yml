@@ -1,0 +1,38 @@
+# Phase 3 scheduled scrape (README §9: "GitHub Actions cron for v1" — a weekly
+# scrape does not justify an orchestrator). Appends one snapshot to RAW, then
+# rebuilds the waiver staging/marts and runs the data-quality checks.
+#
+# Needs SNOWFLAKE_ACCOUNT / SNOWFLAKE_USER / SNOWFLAKE_PASSWORD as repository
+# Actions secrets. The exported Parquet snapshot is NOT rebuilt here — that
+# stays a deliberate, reviewed commit (README §8).
+name: waiver-scrape
+
+on:
+  schedule:
+    - cron: "0 10 * * 2"  # Tuesdays 10:00 UTC — waiver churn peaks after the Monday game
+  workflow_dispatch: {}
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: NFL_Fantasy_Draft_Ideal_Analysis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -e scraper
+      - name: Scrape Sleeper and append to RAW
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: waiver scrape --source sleeper --lookback-hours 168
+      - name: Rebuild waiver marts and run the checks
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: python -m pipeline.run_sql --season 2025 60_waiver.sql 99_tests.sql

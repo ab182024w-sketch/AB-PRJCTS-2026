@@ -407,11 +407,27 @@ As built:
 
 Editable point values re-score in SQL from `STG_PLAYER_WEEK` rather than in pandas, so `sql/50_ideal_team.sql` stays the only definition of the board. `tests/test_custom_board.py` pins that: fed the shipped rule values, the interactive query reproduces `MARTS.IDEAL_TEAM` exactly, in all three modes, on both engines.
 
-**Phase 3 — Waiver-wire tracking scraper (future)** — stack recommendation in §9
+**Phase 3 — Waiver-wire tracking scraper (done)** — stack recommendation in §9; built as `scraper/` + `sql/60_waiver.sql`, surfaced as three new tabs in the same app
 - A scheduled Python scraper that pulls current rostered-percentage / add-drop trend data and merges it against the computed rankings, surfacing players who score well but are widely available.
 - Outputs a "waiver targets" view: high season/per-game points, low roster percentage, favorable upcoming opponent.
 - Snapshots are stored as a time series so week-over-week roster-percentage *movement* is visible, not only the latest state.
 - **Front-end component (§8, "Waiver views").** The scraper is not a CSV drop — waiver data gets its own pages in the same Streamlit app as the rankings: a ranked *Waiver Targets* board, a per-player roster-percentage trend chart, and a *Risers & Fallers* view driven by week-over-week delta. Shares the app, the theme, and the mobile layout rules; no second front end.
+
+As built:
+
+| Piece | File | Note |
+| --- | --- | --- |
+| Scraper | `scraper/` (the `waiver` package) | Sleeper's public JSON API — keyless, robots-clean; trending adds/drops plus the player directory. Raw responses gzipped under `data/waiver_raw/` before any parsing |
+| Raw | `sql/60_waiver.sql` → `RAW.WAIVER_TREND_RAW`, `RAW.WAIVER_PLAYERS_RAW` | Append-only, every row stamped `scraped_at` |
+| Crosswalk | `STAGING.WAIVER_XWALK` | Normalized name + team + position against the hvpkod ids; every row classified `matched` / `matched_by_team` / `ambiguous` / `unmatched` and kept — `sql/99_tests.sql` reports the unresolved ones, nothing is dropped |
+| Marts | `MARTS.WAIVER_TARGETS`, `MARTS.WAIVER_TREND` | Latest snapshot joined to `AGG_PLAYER_SEASON` in all three scoring modes, with the previous snapshot's delta |
+| Tabs | `app/streamlit_app.py` | *Waiver targets*, *Risers & fallers*, *Waiver trend* — same app, theme, scoring toggle, and card layout below 700px |
+| Schedule | `.github/workflows/waiver-scrape.yml` | §9's v1 recommendation (GitHub Actions cron), Tuesdays 10:00 UTC |
+
+Where reality contradicted this spec:
+
+1. **No public source publishes roster percentage.** Sleeper's documented public API exposes trending **add/drop counts** (24h–7d windows), not rostered %; its ownership endpoint 404s. Yahoo/ESPN/NFL.com expose roster % only behind logins or prohibit scraping (robots/ToS), and §9's rules — public API first, never behind a login — outrank the roster-% column. So the availability signal everywhere in Phase 3 is *add/drop counts and their week-over-week delta*: a large add count means the player is being picked up league-wide, i.e. was widely available. The roster-% threshold slider became a minimum-adds filter.
+2. **"Upcoming opponent" has no source in the off-season.** The hvpkod data is a completed season with no future schedule rows, so `next_opponent` is carried as NULL until an in-season scrape has a schedule to point at.
 
 **Phase 4 — iOS / Android beta (very distant — target: end of the 2026–27 season at the earliest)**
 - Explicitly gated behind Phases 1–3 being complete and *working*. Feature-correctness on the web comes first; a native app that wraps a half-finished pipeline is two problems instead of one.
@@ -611,7 +627,7 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 
 ---
 
-## 12. Implementation status (Phases 0, 1, 1.5, 1.6)
+## 12. Implementation status (Phases 0, 1, 1.5, 1.6, 2, 3)
 
 | Piece | State |
 | --- | --- |
@@ -624,7 +640,9 @@ The resulting `MARTS.WAIVER_TARGETS` view joins the latest snapshot to `AGG_PLAY
 | `pipeline/run_sql.py` | **Built and run.** Executes the SQL files in order against Snowflake and sets `TARGET_SEASON` from `--season` |
 | Phase 1.5 (`--season` everywhere, per-season deletes) | **Done and verified live**: 2024 loaded alongside 2025 without disturbing it, re-runs produce no duplicates |
 | Phase 1.6 (nflverse team results) | **Done and verified live**: 544 regular-season team-weeks for 2025, full join coverage, DEF board rebuilt on IDP + tier points. Run log: `reference/PHASE15_16_SNOWFLAKE_RUN.md` |
-| Phases 2, 3, 4 | Not started |
+| Phase 2 (Streamlit dashboard) | **Done** — see the §7 as-built table; runs credential-free off `data/snapshot/*.parquet` |
+| Phase 3 (waiver-wire tracking) | **Done and run against Snowflake** — Sleeper scraper in `scraper/`, `sql/60_waiver.sql`, three new app tabs, weekly GitHub Actions cron. Deviations from the spec (no public roster-%, off-season opponent) recorded in §7 |
+| Phase 4 | Not started |
 
 The harness is a verification tool, not a second pipeline: it exists so the scoring rules and the
 reconciliations could be checked before the SQL ever runs. Scoring truth stays in `SCORING_RULES`.

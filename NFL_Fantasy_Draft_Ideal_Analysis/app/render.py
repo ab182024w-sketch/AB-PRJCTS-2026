@@ -15,7 +15,6 @@ survives on a narrow screen.
 from __future__ import annotations
 
 import html
-import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -101,7 +100,7 @@ class Column:
 
 
 def _format(value: object, fmt: str) -> str:
-    if value is None or (isinstance(value, float) and math.isnan(value)):
+    if value is None or pd.isna(value):
         return "—"
     if isinstance(value, (int, float)):
         return fmt.format(value)

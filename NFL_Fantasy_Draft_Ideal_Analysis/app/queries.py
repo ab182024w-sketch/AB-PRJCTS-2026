@@ -88,6 +88,33 @@ WHERE scoring_mode = '{mode}'
 ORDER BY component, stat
 """
 
+# ------------------------------------------------------- Phase 3 waiver views ---
+# Unmatched rows (player_id IS NULL) carry no season or scoring_mode, so the
+# season/mode filter must let them through — hiding them would hide exactly the
+# crosswalk gaps the spec says to surface.
+
+WAIVER_TARGETS = """
+SELECT source, scraped_at, external_player_id, player_id, player_name, pos, team,
+       adds, drops, net_adds, prev_scraped_at, delta_adds, delta_drops,
+       total_pts, pts_per_game, games_played, playoff_pts, last_4_pts_per_game,
+       next_opponent, match_status
+FROM {waiver_targets}
+WHERE (season = {season} AND scoring_mode = '{mode}') OR player_id IS NULL
+ORDER BY pts_per_game DESC NULLS LAST, adds DESC
+"""
+
+WAIVER_TREND_PLAYER = """
+SELECT scraped_at, lookback_hours, adds, drops, net_adds
+FROM {waiver_trend}
+WHERE source = '{source}' AND external_player_id = '{external_player_id}'
+ORDER BY scraped_at
+"""
+
+WAIVER_LATEST_SCRAPE = """
+SELECT MAX(scraped_at) AS scraped_at
+FROM {waiver_trend}
+"""
+
 
 def _values_clause(rules: dict[str, float]) -> str:
     rows = ", ".join(

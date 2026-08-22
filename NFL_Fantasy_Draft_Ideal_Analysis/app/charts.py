@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 COMPONENT_COLORS = {
     "pass_pts": "#ef476f",
@@ -133,6 +134,44 @@ def defense_scatter(defenses: pd.DataFrame, top: int) -> go.Figure:
         xaxis_title="Points allowed per week", yaxis_title="Season fantasy points"
     )
     return _layout(figure, 420)
+
+
+def waiver_player_trend(trend: pd.DataFrame, weeks: pd.DataFrame | None) -> go.Figure:
+    """A waiver player's add/drop counts over scrape time, with their weekly
+    fantasy points below when the crosswalk matched them.
+
+    Two panels rather than one overlay: scrapes live on a wall-clock axis and
+    fantasy points on a week-number axis, and the two only share an axis once
+    in-season scrapes exist. Stacking keeps both readable in the meantime.
+    """
+    has_weeks = weeks is not None and not weeks.empty
+    figure = make_subplots(
+        rows=2 if has_weeks else 1,
+        cols=1,
+        shared_xaxes=False,
+        vertical_spacing=0.16,
+        subplot_titles=(
+            ("Adds and drops per scrape", "Weekly fantasy points")
+            if has_weeks
+            else ("Adds and drops per scrape",)
+        ),
+    )
+    figure.add_scatter(
+        x=trend["scraped_at"], y=trend["adds"], name="Adds",
+        mode="lines+markers", line={"color": "#06d6a0"}, row=1, col=1,
+    )
+    figure.add_scatter(
+        x=trend["scraped_at"], y=trend["drops"], name="Drops",
+        mode="lines+markers", line={"color": "#ef476f"}, row=1, col=1,
+    )
+    if has_weeks:
+        figure.add_bar(
+            x=weeks["week"], y=weeks["total_pts"], name="Points",
+            marker_color="#4cc9f0", row=2, col=1,
+        )
+        figure.update_xaxes(title_text="Week", dtick=1, row=2, col=1)
+    figure.update_layout(hovermode="closest")
+    return _layout(figure, 460 if has_weeks else 300)
 
 
 def rank_comparison(frame: pd.DataFrame, label_column: str) -> go.Figure:
