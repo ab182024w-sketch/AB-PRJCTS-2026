@@ -384,15 +384,21 @@ def waiver_targets_page(targets: pd.DataFrame, season: int, mode: str, detail: b
     with st.expander("Filters", expanded=False):
         left, right = st.columns(2)
         positions = left.multiselect(
-            "Positions", sorted(targets["pos"].dropna().unique()), default=[]
+            "Positions",
+            sorted(targets["pos"].dropna().unique()),
+            default=[],
+            key="waiver_positions",
         )
         max_games = int(targets["games_played"].max()) if targets["games_played"].notna().any() else 0
-        min_games = left.slider("Minimum games", 0, max(max_games, 1), 0)
-        min_adds = right.slider("Minimum adds", 0, int(targets["adds"].max()), 0)
+        min_games = left.slider("Minimum games", 0, max(max_games, 1), 0, key="waiver_min_games")
+        min_adds = right.slider(
+            "Minimum adds", 0, int(targets["adds"].max()), 0, key="waiver_min_adds"
+        )
         matched_only = right.toggle(
             "Hide players missing from the rankings",
             value=False,
             help="Rookies, IDP depth and team defenses have no season stats to join to",
+            key="waiver_matched_only",
         )
 
     filtered = targets[targets["adds"] >= min_adds]
@@ -461,7 +467,7 @@ def waiver_trend_page(targets: pd.DataFrame, season: int, mode: str) -> None:
         )
         for row in by_adds.itertuples()
     }
-    choice = st.selectbox("Player", list(labels), index=0)
+    choice = st.selectbox("Player", list(labels), index=0, key="waiver_trend_player")
     source, external_id, player_id = labels[choice]
 
     record = by_adds[by_adds["external_player_id"] == external_id].iloc[0]
