@@ -183,6 +183,38 @@ FROM MARTS.FCT_TEAM_DEFENSE_WEEK
 WHERE NOT has_team_result
 
 UNION ALL
+-- ------------------------------------------------ Phase 3 waiver layer (§7) ---
+-- The raw grain the STG_WAIVER_TREND pivot relies on: one row per scrape per
+-- feed per player. A duplicate would double a player's add count.
+SELECT CURRENT_TIMESTAMP(), 'waiver_trend_grain_unique', 'error', COUNT(*),
+       'duplicate (scraped_at, source, kind, external_player_id) keys in WAIVER_TREND_RAW'
+FROM (
+    SELECT scraped_at, source, kind, external_player_id
+    FROM RAW.WAIVER_TREND_RAW
+    GROUP BY scraped_at, source, kind, external_player_id
+    HAVING COUNT(*) > 1
+)
+
+UNION ALL
+-- Crosswalk coverage is warn-level by design: trending lists routinely carry
+-- players the rankings cannot know (rookies before their first game, IDP
+-- depth, team defenses), so unmatched rows are expected — the point is that
+-- they are counted and visible, not dropped.
+SELECT CURRENT_TIMESTAMP(), 'waiver_xwalk_unmatched', 'warn', COUNT(*),
+       'waiver players with no name+position match in the rankings'
+FROM WAIVER_XWALK
+WHERE match_status = 'unmatched'
+
+UNION ALL
+-- Ambiguous means several same-name same-position players and none on the
+-- scraped team — the crosswalk refuses to guess and the row carries NULL
+-- player_id.
+SELECT CURRENT_TIMESTAMP(), 'waiver_xwalk_ambiguous', 'warn', COUNT(*),
+       'waiver players matching several ranking players with no team tie-break'
+FROM WAIVER_XWALK
+WHERE match_status = 'ambiguous'
+
+UNION ALL
 -- ---------------------------------------------------------------------------
 -- Reconciliation 1 — against the source's own TotalPoints (README §6).
 -- Local finding, and the reason this is warn-level and week-filtered:

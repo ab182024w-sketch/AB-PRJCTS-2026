@@ -33,6 +33,7 @@ PIPELINE_FILES = (
     "35_season_agg.sql",
     "40_defense.sql",
     "50_ideal_team.sql",
+    "60_waiver.sql",
     "99_tests.sql",
 )
 

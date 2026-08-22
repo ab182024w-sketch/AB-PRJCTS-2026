@@ -37,6 +37,15 @@ EXPORTS = {
         "opponent, is_away, is_bye, stat, value "
         "FROM FANTASY.STAGING.STG_PLAYER_WEEK WHERE season = {season}"
     ),
+    # Waiver marts (Phase 3). season IS NULL keeps the unmatched/ambiguous rows
+    # the crosswalk could not attach to a ranking player — the dashboard shows
+    # them rather than hiding a coverage problem. The trend history is
+    # season-agnostic by design: scrapes are statements about "now".
+    "waiver_targets": (
+        "SELECT * FROM FANTASY.MARTS.WAIVER_TARGETS "
+        "WHERE season = {season} OR season IS NULL"
+    ),
+    "waiver_trend": "SELECT * FROM FANTASY.MARTS.WAIVER_TREND",
 }
 
 

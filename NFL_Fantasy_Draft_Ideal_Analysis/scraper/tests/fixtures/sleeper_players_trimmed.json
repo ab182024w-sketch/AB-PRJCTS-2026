@@ -1,0 +1,226 @@
+{
+ "10218": {
+  "player_id": "10218",
+  "full_name": "Xavier Hutchinson",
+  "first_name": "Xavier",
+  "last_name": "Hutchinson",
+  "team": "HOU",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "xavierhutchinson"
+ },
+ "13533": {
+  "player_id": "13533",
+  "full_name": "Barion Brown",
+  "first_name": "Barion",
+  "last_name": "Brown",
+  "team": "NO",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "barionbrown"
+ },
+ "2505": {
+  "player_id": "2505",
+  "full_name": "Darren Waller",
+  "first_name": "Darren",
+  "last_name": "Waller",
+  "team": "CAR",
+  "position": "TE",
+  "fantasy_positions": [
+   "TE"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "darrenwaller"
+ },
+ "7528": {
+  "player_id": "7528",
+  "full_name": "Najee Harris",
+  "first_name": "Najee",
+  "last_name": "Harris",
+  "team": "NYG",
+  "position": "RB",
+  "fantasy_positions": [
+   "RB"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "najeeharris"
+ },
+ "11834": {
+  "player_id": "11834",
+  "full_name": "Devaughn Vele",
+  "first_name": "Devaughn",
+  "last_name": "Vele",
+  "team": "NO",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "devaughnvele"
+ },
+ "13296": {
+  "player_id": "13296",
+  "full_name": "Caleb Douglas",
+  "first_name": "Caleb",
+  "last_name": "Douglas",
+  "team": "MIA",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "calebdouglas"
+ },
+ "12484": {
+  "player_id": "12484",
+  "full_name": "Jayden Higgins",
+  "first_name": "Jayden",
+  "last_name": "Higgins",
+  "team": "HOU",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Inactive",
+  "search_full_name": "jaydenhiggins"
+ },
+ "11435": {
+  "player_id": "11435",
+  "full_name": "Emanuel Wilson",
+  "first_name": "Emanuel",
+  "last_name": "Wilson",
+  "team": "SEA",
+  "position": "RB",
+  "fantasy_positions": [
+   "RB"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "emanuelwilson"
+ },
+ "12540": {
+  "player_id": "12540",
+  "full_name": "Chimere Dike",
+  "first_name": "Chimere",
+  "last_name": "Dike",
+  "team": "TEN",
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "chimeredike"
+ },
+ "1339": {
+  "player_id": "1339",
+  "full_name": "Zach Ertz",
+  "first_name": "Zach",
+  "last_name": "Ertz",
+  "team": null,
+  "position": "TE",
+  "fantasy_positions": [
+   "TE"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "zachertz"
+ },
+ "3321": {
+  "player_id": "3321",
+  "full_name": "Tyreek Hill",
+  "first_name": "Tyreek",
+  "last_name": "Hill",
+  "team": null,
+  "position": "WR",
+  "fantasy_positions": [
+   "WR"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "tyreekhill"
+ },
+ "4035": {
+  "player_id": "4035",
+  "full_name": "Alvin Kamara",
+  "first_name": "Alvin",
+  "last_name": "Kamara",
+  "team": "NO",
+  "position": "RB",
+  "fantasy_positions": [
+   "RB"
+  ],
+  "active": true,
+  "status": "Active",
+  "search_full_name": "alvinkamara"
+ },
+ "8842": {
+  "player_id": "8842",
+  "full_name": "Malkelm Morrison",
+  "first_name": "Malkelm",
+  "last_name": "Morrison",
+  "team": null,
+  "position": "CB",
+  "fantasy_positions": [
+   "DB"
+  ],
+  "active": true,
+  "status": "Injured Reserve",
+  "search_full_name": "malkelmmorrison"
+ },
+ "995": {
+  "player_id": "995",
+  "full_name": "Ron Parker",
+  "first_name": "Ron",
+  "last_name": "Parker",
+  "team": null,
+  "position": "FS",
+  "fantasy_positions": [
+   "DB"
+  ],
+  "active": false,
+  "status": "Injured Reserve",
+  "search_full_name": "ronparker"
+ },
+ "156": {
+  "player_id": "156",
+  "full_name": "William Gay",
+  "first_name": "William",
+  "last_name": "Gay",
+  "team": null,
+  "position": "CB",
+  "fantasy_positions": [
+   "DB"
+  ],
+  "active": false,
+  "status": "Inactive",
+  "search_full_name": "williamgay"
+ },
+ "CLE": {
+  "player_id": "CLE",
+  "full_name": null,
+  "first_name": "Cleveland",
+  "last_name": "Browns",
+  "team": "CLE",
+  "position": "DEF",
+  "fantasy_positions": [
+   "DEF"
+  ],
+  "active": true,
+  "status": null,
+  "search_full_name": null
+ }
+}

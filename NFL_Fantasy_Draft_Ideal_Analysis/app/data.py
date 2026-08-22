@@ -32,6 +32,8 @@ SNOWFLAKE_OBJECTS = {
     "team_def_week": "FANTASY.MARTS.FCT_TEAM_DEFENSE_WEEK",
     "rules": "FANTASY.MARTS.SCORING_RULES",
     "stg": "FANTASY.STAGING.STG_PLAYER_WEEK",
+    "waiver_targets": "FANTASY.MARTS.WAIVER_TARGETS",
+    "waiver_trend": "FANTASY.MARTS.WAIVER_TREND",
 }
 
 SNAPSHOT_OBJECTS = {name: name for name in SNOWFLAKE_OBJECTS}

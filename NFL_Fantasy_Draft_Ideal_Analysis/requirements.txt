@@ -12,3 +12,6 @@ plotly>=5.22
 # snapshot written by pipeline.export_marts through DuckDB.
 duckdb>=1.0
 pyarrow>=15.0
+
+# Phase 3 waiver scraper (scraper/): typed validation at the scrape boundary
+pydantic>=2.0
